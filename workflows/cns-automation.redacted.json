@@ -1,0 +1,2573 @@
+{
+  "name": "第一：CNS自动化",
+  "nodes": [
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "aeacec0e-3de3-4355-bb3c-6f84304e9b34",
+              "name": "target_url",
+              "value": "=https://www.cell.com/action/doSearch?type=quicksearch&text1=aging+OR+ageing+OR+lifespan+OR+longevity+OR+regeneration+OR+senescence+OR+rejuvenation&field1=AbstractTitleKeywordFilterField&Ppub=%5B{{ $now.minus({days: 7}).format('yyyyMMdd') }}+TO+{{ $now.format('yyyyMMdd') }}2359%5D&pageSize=50&startPage=0&sortBy=Earliest",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -2384,
+        576
+      ],
+      "id": "1d6d6ed2-ccf9-47c8-8d33-db0232a789e8",
+      "name": "Edit Fields1"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=你是一个数据提取专家。请处理以下 Markdown 内容，提取所有研究论文（忽略广告、导航、Review、Correction等非核心内容）。 输出要求：\n\n返回一个纯 JSON 数组 (Array)。\n\nLink 字段：如果是 /cell/fulltext/... 这种相对路径，必须补全为 https://www.cell.com/cell/fulltext/... (即加上域名前缀)。\n\nDate 字段：必须将日期转换为标准的 YYYY-MM-DD 格式（例如 'February 2, 2026' -> '2026-02-02'）。\n\nJSON 结构： [ { \"title\": \"论文标题\", \"journal\": \"期刊名\", \"date\": \"2026-02-02\", \"link\": \"https://www.cell.com/...\", \"type\": \"Article\" } ]\n\n待处理内容： {{ $json.data.markdown }}",
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        -1968,
+        576
+      ],
+      "id": "c1744b9b-fda4-4af9-b711-9f889b21d6a6",
+      "name": "Basic LLM Chain"
+    },
+    {
+      "parameters": {
+        "options": {
+          "maxTokens": 8192
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+      "typeVersion": 1,
+      "position": [
+        -1952,
+        736
+      ],
+      "id": "c490c064-1278-42ea-84fc-c8f94231965d",
+      "name": "DeepSeek Chat Model",
+      "credentials": {
+        "deepSeekApi": {
+          "id": "REDACTED_DEEPSEEK_CREDENTIAL_ID",
+          "name": "REDACTED_DEEPSEEK_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// 获取上一步 AI 节点的输出文本\nconst rawText = $input.first().json.text;\n\n// 1. 去掉 markdown 的代码块标记 (```json 和 ```)\nconst cleanText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();\n\n// 2. 将字符串解析为真正的 JSON 对象\nconst jsonData = JSON.parse(cleanText);\n\n// 3. 返回给 n8n，让它把每一篇文章当成一个独立的 Item\nreturn jsonData;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1616,
+        576
+      ],
+      "id": "93625604-7a69-4006-b01d-fc8842b4b876",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "3f913663-8344-43ec-a59a-4043ba264262",
+              "leftValue": "={{ $json.date }}",
+              "rightValue": "={{ $now.minus({days: 2}) }}",
+              "operator": {
+                "type": "dateTime",
+                "operation": "after"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -1408,
+        576
+      ],
+      "id": "63bdf91a-9300-4d91-aebc-8e63eb49e6ca",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "fieldsToAggregate": {
+          "fieldToAggregate": [
+            {
+              "fieldToAggregate": "link",
+              "renameField": true,
+              "outputFieldName": "urls"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        -1200,
+        480
+      ],
+      "id": "b05c09bb-b310-4a07-b4b6-fec608c1f147",
+      "name": "Aggregate",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.firecrawl.dev/v1/batch/scrape",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $credentials.firecrawlApi.apiKey }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({urls: $json.urls, formats: ['markdown'], onlyMainContent: true}) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -992,
+        480
+      ],
+      "id": "9880e39f-8e59-4f1c-a74e-a0c640f09770",
+      "name": "HTTP: Cell 批量爬取",
+      "credentials": {
+        "firecrawlApi": {
+          "id": "REDACTED_FIRECRAWL_CREDENTIAL_ID",
+          "name": "REDACTED_FIRECRAWL_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 45
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -784,
+        480
+      ],
+      "id": "ab25dc41-2983-40d5-811a-6625d87a1b7a",
+      "name": "Wait",
+      "webhookId": "REDACTED_WEBHOOK_ID"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.firecrawl.dev/v1/batch/scrape/{{ $('HTTP: Cell 批量爬取').item.json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $credentials.firecrawlApi.apiKey }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -576,
+        480
+      ],
+      "id": "705e65ef-989e-45ae-bef4-59e552ebb66e",
+      "name": "HTTP: Cell 批量状态",
+      "credentials": {
+        "firecrawlApi": {
+          "id": "REDACTED_FIRECRAWL_CREDENTIAL_ID",
+          "name": "REDACTED_FIRECRAWL_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.firecrawl.dev/v1/scrape",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $credentials.firecrawlApi.apiKey }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({url: $json.target_url, formats: ['markdown'], onlyMainContent: true, waitFor: 2000}) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -2176,
+        576
+      ],
+      "id": "366a2c76-6663-4e97-a3ff-c9cae0cd38ca",
+      "name": "HTTP: Cell 列表",
+      "credentials": {
+        "firecrawlApi": {
+          "id": "REDACTED_FIRECRAWL_CREDENTIAL_ID",
+          "name": "REDACTED_FIRECRAWL_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// 获取 Firecrawl 返回的 data 数组\nconst items = $input.first().json.data;\n\n// 直接返回这个数组，n8n 会自动识别为多条数据\nreturn items;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -368,
+        480
+      ],
+      "id": "bd9653cd-a99c-43a4-8b1b-09381d0f8eff",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e1e77e35-2b20-4098-b569-17df9a2c5742",
+              "name": "title",
+              "value": "={{ $json.metadata.title || $json.metadata.ogTitle }}",
+              "type": "string"
+            },
+            {
+              "id": "8ad6afa3-d917-4566-874b-6bd1a9131950",
+              "name": "abstract",
+              "value": "={{ $json.metadata.citation_abstract || $json.metadata.ogDescription }}",
+              "type": "string"
+            },
+            {
+              "id": "14a2ec7d-3ef7-48ac-acb5-ab5379830f83",
+              "name": "link",
+              "value": "={{ $json.metadata.url || $json.metadata.ogUrl }}",
+              "type": "string"
+            },
+            {
+              "id": "fd464a63-27d5-4d8f-b6b5-8134cf6d38ac",
+              "name": "date",
+              "value": "={{ $json.metadata.citation_online_date }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -160,
+        480
+      ],
+      "id": "99245f3c-8b91-4262-8078-5202490b0262",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=你是一个专注于抗衰老（anti-aging/longevity）领域的内容过滤器。不是编辑，不是作者，不要生成任何内容。\n判断这篇文章是否应该出现在一个\"抗衰老/长寿科学\"资讯平台上。\n\n## 判断标准（必须同时满足两条才算通过）\n\n### 条件1：主题直接性\n文章的【核心研究对象】或【核心事件】必须直接是以下之一：\n- 衰老的生物学机制（如端粒、表观遗传时钟、细胞衰老/senescence、线粒体衰退、干细胞耗竭、蛋白稳态失调等衰老hallmarks等）\n- 延长寿命或健康寿命的干预（热量限制、senolytics、NAD+前体、雷帕霉素、二甲双胍、运动/睡眠/饮食对衰老的影响等）\n- 衰老生物标志物和检测（生物年龄、衰老时钟、衰老细胞标记物）\n- 再生医学中直接针对衰老退化的方向\n- 长寿科学领域的产业、政策、人物动态\n\n### 条件2：排除间接关联\n以下内容即使和衰老\"有点关系\"也必须排除：\n- 某个老年常见病的具体临床治疗方案\n- 基础分子生物学发现，仅在讨论段提及\"可能与衰老有关\"\n- 药企商业新闻，除非直接涉及抗衰产品线\n- 癌症研究（除非涉及细胞衰老与癌症的交叉机制）\n- 感染、发育、生殖、儿科研究\n- 纯粹的流行病学统计\n- 标题含有撤稿、或更正之前的内容\n- 仅仅是\"研究对象是老年人\"但不涉及衰老机制的\n- 仅仅是与老年相关的病症的，比如黄斑变性、阿尔兹海默症、肌少症\n\n论文标题：{{ $json.title }}\n论文摘要：{{ $json.abstract }}\n\n请以纯JSON格式返回结果（直接输出JSON，不加任何代码块标记或其他文字）：\n{\"is_relevant\": true, \"confidence\": \"high\", \"reason\": \"简短说明（中文，30字以内）\"}\n\n注意：confidence 只能是 high、medium、low 之一；is_relevant 为 true 或 false",
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        64,
+        496
+      ],
+      "id": "179ee76f-8f0f-4d21-8fbc-7512ab2c8bdc",
+      "name": "AI抗衰相关性审核"
+    },
+    {
+      "parameters": {
+        "options": {
+          "maxTokens": 256
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+      "typeVersion": 1,
+      "position": [
+        112,
+        656
+      ],
+      "id": "25b91c9c-ee49-41d0-bd98-b7791862b478",
+      "name": "DeepSeek Chat Model2",
+      "credentials": {
+        "deepSeekApi": {
+          "id": "REDACTED_DEEPSEEK_CREDENTIAL_ID",
+          "name": "REDACTED_DEEPSEEK_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const allInputItems = $input.all();\nconst sourceItems = $('Edit Fields').all();\n\nreturn allInputItems.map((item, i) => {\n  const rawText = (item.json.text || '').replace(/```json/g, '').replace(/```/g, '').trim();\n\n  let result = { is_relevant: false, confidence: 'low', reason: '解析失败' };\n  try {\n    result = JSON.parse(rawText);\n  } catch(e) {\n    const match = rawText.match(/\\{[^{}]+\\}/s);\n    if (match) {\n      try { result = JSON.parse(match[0]); } catch(e2) {}\n    }\n  }\n\n  const orig = (sourceItems[i] && sourceItems[i].json) ? sourceItems[i].json : {};\n\n  return {\n    json: {\n      title:            orig.title    || '',\n      abstract:         orig.abstract || '',\n      link:             orig.link     || '',\n      date:             orig.date     || '',\n      is_relevant:      result.is_relevant === true,\n      confidence:       result.confidence  || 'low',\n      relevance_reason: result.reason      || ''\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        368,
+        464
+      ],
+      "id": "9eaffd11-2e2a-4cde-8471-1d1b6c2c4b86",
+      "name": "解析相关性结果"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "cell-if-cond-01",
+              "leftValue": "={{ $json.is_relevant }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        512,
+        480
+      ],
+      "id": "bcc54ee3-7d52-4044-8d42-b9a2195cd10c",
+      "name": "是否抗衰相关"
+    },
+    {
+      "parameters": {
+        "model": "google/gemini-2.5-flash",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        944,
+        656
+      ],
+      "id": "23bca828-e808-4b1d-95b5-95ce093337ee",
+      "name": "OpenRouter Chat Model (Cell)",
+      "credentials": {
+        "openRouterApi": {
+          "id": "REDACTED_OPENROUTER_CREDENTIAL_ID",
+          "name": "REDACTED_OPENROUTER_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cell-map-01",
+              "name": "original_title",
+              "value": "={{ $json.title }}",
+              "type": "string"
+            },
+            {
+              "id": "cell-map-02",
+              "name": "content_for_ai",
+              "value": "={{ $json.abstract }}",
+              "type": "string"
+            },
+            {
+              "id": "cell-map-03",
+              "name": "source_name",
+              "value": "={{ (() => { const url = $json.link || ''; const m = url.match(/cell\\.com\\/([^/]+)\\//); if (!m) return 'Cell Press'; const s = m[1].replace(/-/g, ' '); return s.charAt(0).toUpperCase() + s.slice(1); })() }}",
+              "type": "string"
+            },
+            {
+              "id": "cell-map-04",
+              "name": "Impact_Factor",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "cell-map-05",
+              "name": "info_quality",
+              "value": "rich",
+              "type": "string"
+            },
+            {
+              "id": "cell-map-06",
+              "name": "link",
+              "value": "={{ $json.link }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        736,
+        480
+      ],
+      "id": "917bebf3-b1ca-44b3-b408-76b45a6ec690",
+      "name": "字段映射1"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=# Role\n你是一位资深抗衰媒体编辑。这篇内容已通过相关性审核，直接生成不了解医学知识的普通人都能看懂、且愿意点击的有吸引力的抗衰相关的资讯媒体内容。\n\n# Input\n- 来源: {{ $json.source_name }} | IF: {{ $json.Impact_Factor }} | 信息质量: {{ $json.info_quality }}\n- 标题: {{ $json.original_title }}\n- 正文: {{ $json.content_for_ai }}\n\n# 写作规则\n1. 写成编辑takeaway，不是论文压缩版。首句=核心发现+对普通人的意义\n2. 禁止使用「研究揭示」「值得注意的是」「重磅消息」等空话。保留干预对象、机制、关键数据（如果有，保留P值即可）、转化意义\n3. 保留至少一个机构或作者。展望贴近科学事实但易懂性强\n4. info_quality=thin时只总结已有信息，不脑补\n5. 综述/评论/观点须明确证据属性\n\n## 策略\n120-160字，包括研究结论+研究机制与仅包含P值的数据+研究意义+普通人能听懂的一至两句话的展望\n\n## 中文标题：22-34字，根据内容重新生成的有吸引力的标题，符合中文阅读习惯，不夸大\n\n# Output Format (JSON Only)\n不要markdown代码块。\n{\n  \"translated_title\": \"根据内容重新生成的有吸引力的中文标题\",\n  \"summary\": \"中文快讯解读（编辑视角的takeaway）\",\n  \"translated_abstract\": \"将原文摘要/正文在保留原有核心数据和结论不变的前提下，翻译+解读为流畅专业的中文，不是逐句直译，而是用中文公众号科普媒体的表达习惯重新润色，保留关键数据和结论，让普通读者也能看懂并因为有趣继续看下去\",\n  \"seo_keywords\": \"根据内容生成3-5个中文SEO关键词，用逗号分隔，例如：表观遗传时钟,衰老干预,NAD+\"\n}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        928,
+        496
+      ],
+      "id": "397eac5e-cb46-49ac-91d9-e80fc6c0f48d",
+      "name": "内容生成AI1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst allOriginals = $('字段映射1').all();\n\nconst results = [];\nfor (let i = 0; i < items.length; i++) {\n  const item = items[i];\n  const orig = allOriginals[i]?.json || {};\n\n  let finalSummary = '', finalTitle = '', translatedAbstract = '', seoKeywords = '';\n  try {\n    const raw = item.json.output || item.json.text || '';\n    const fo = raw.indexOf('{'), lc = raw.lastIndexOf('}');\n    if (fo !== -1 && lc !== -1) {\n      const p = JSON.parse(raw.substring(fo, lc + 1));\n      if (p.summary)             finalSummary       = p.summary;\n      if (p.translated_title)    finalTitle         = p.translated_title;\n      if (p.translated_abstract) translatedAbstract = p.translated_abstract;\n      if (p.seo_keywords)        seoKeywords        = p.seo_keywords;\n    }\n  } catch(e) {}\n\n  results.push({\n    json: {\n      ...orig,\n      is_relevant:         true,\n      summary:             finalSummary,\n      title:               finalTitle || orig.original_title || orig.title || '标题缺失',\n      translated_abstract: translatedAbstract,\n      seo_keywords:        seoKeywords\n    }\n  });\n}\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1216,
+        496
+      ],
+      "id": "f489ba49-5606-409f-901b-16bfc4c4c609",
+      "name": "解析生成结果1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const d = item.json;\n\n  const wpTitle      = d.title || d.original_title || '标题缺失';\n  const sourceInfo   = d.source_name || 'Cell Press';\n  const impactFactor = d.Impact_Factor ? `（IF: ${d.Impact_Factor}）` : '';\n  const link         = d.link || d.original_link || '';\n\n  let wpContent = '';\n  if (d.translated_abstract) {\n    wpContent += `<p>${d.translated_abstract}</p>\\n\\n`;\n  }\n  wpContent += `<p>📎 来源：${sourceInfo}${impactFactor}`;\n  if (link) {\n    wpContent += ` | <a href=\"${link}\" target=\"_blank\" rel=\"noopener\">查看原文</a>`;\n  }\n  wpContent += `</p>`;\n\n  results.push({\n    json: {\n      wp_title:           wpTitle,\n      wp_content:         wpContent,\n      wp_excerpt:         d.summary || '',\n      wp_seo_keywords:    d.seo_keywords || '',\n      wp_seo_description: (d.summary || '').substring(0, 156),\n      original_link:      link,\n      source_name:        sourceInfo,\n      summary:            d.summary || ''\n    }\n  });\n}\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1376,
+        496
+      ],
+      "id": "4d8232d7-3e11-40e3-9172-00abfd75571f",
+      "name": "计划发到Wordpress1"
+    },
+    {
+      "parameters": {
+        "title": "={{ $json.wp_title }}",
+        "additionalFields": {
+          "content": "={{ $json.wp_content }}",
+          "status": "draft",
+          "categories": [
+            14
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.wordpress",
+      "typeVersion": 1,
+      "position": [
+        1552,
+        496
+      ],
+      "id": "25bd886a-eecd-4743-bcb4-d8c7dd079b1a",
+      "name": "Create a post1",
+      "credentials": {
+        "wordpressApi": {
+          "id": "REDACTED_WORDPRESS_CREDENTIAL_ID",
+          "name": "REDACTED_WORDPRESS_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://your-wordpress-site.com/wp-json/wp/v2/posts/{{ $json.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "excerpt",
+              "value": "={{ $('计划发到Wordpress1').item.json.summary }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1760,
+        496
+      ],
+      "id": "37481e5d-5018-4079-98c2-429f535cd432",
+      "name": "SEO和摘要1",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "REDACTED_HTTP_BASIC_AUTH_ID",
+          "name": "REDACTED_HTTP_BASIC_AUTH_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fieldsToAggregate": {
+          "fieldToAggregate": [
+            {
+              "fieldToAggregate": "link",
+              "renameField": true,
+              "outputFieldName": "urls"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        -960,
+        1248
+      ],
+      "id": "7d92be95-4f3f-42f6-9631-ed050f67a863",
+      "name": "汇总文章URL",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.firecrawl.dev/v1/batch/scrape",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $credentials.firecrawlApi.apiKey }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({urls: $json.urls, formats: ['markdown'], onlyMainContent: true}) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -176,
+        1392
+      ],
+      "id": "e48a6a86-5532-47a6-8be6-143212df3acd",
+      "name": "HTTP: Science RSS 批量爬取",
+      "credentials": {
+        "firecrawlApi": {
+          "id": "REDACTED_FIRECRAWL_CREDENTIAL_ID",
+          "name": "REDACTED_FIRECRAWL_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 45
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        32,
+        1392
+      ],
+      "id": "945e8293-1013-4250-9842-12a4747a71c4",
+      "name": "等待抓取完成",
+      "webhookId": "REDACTED_WEBHOOK_ID"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.firecrawl.dev/v1/batch/scrape/{{ $('HTTP: Science RSS 批量爬取').item.json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $credentials.firecrawlApi.apiKey }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        224,
+        1392
+      ],
+      "id": "a9cd12c2-864a-43c1-8089-c1a45ae86b59",
+      "name": "HTTP: Science RSS 批量状态",
+      "credentials": {
+        "firecrawlApi": {
+          "id": "REDACTED_FIRECRAWL_CREDENTIAL_ID",
+          "name": "REDACTED_FIRECRAWL_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.first().json.data;\nreturn items;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        432,
+        1392
+      ],
+      "id": "0c3b2665-779b-40ed-b78d-cbabf2252269",
+      "name": "展开为独立条目1"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 从Science文章Markdown中提取结构化内容\n// 优先级：Structured Abstract > Abstract > Editor's summary\n\nfunction extractSection(markdown, sectionName) {\n  const escaped = sectionName.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');\n  const regex = new RegExp('##\\\\s+' + escaped + '\\\\s*\\\\n([\\\\s\\\\S]*?)(?=\\\\n##\\\\s|$)', 'i');\n  const match = markdown.match(regex);\n  if (match && match[1]) {\n    return match[1]\n      .replace(/!\\[.*?\\]\\(.*?\\)/g, '')\n      .replace(/\\[([^\\]]+)\\]\\([^)]+\\)/g, '$1')\n      .replace(/\\n{3,}/g, '\\n\\n')\n      .trim();\n  }\n  return null;\n}\n\nconst items = $input.all();\n\nreturn items.map(item => {\n  const markdown = item.json.markdown || '';\n  const metadata = item.json.metadata || {};\n\n  const structuredAbstract = extractSection(markdown, 'Structured Abstract');\n  const plainAbstract      = extractSection(markdown, 'Abstract');\n  const editorsSummary     = extractSection(markdown, \"Editor's summary\");\n\n  const bestContent =\n    structuredAbstract ||\n    plainAbstract ||\n    editorsSummary ||\n    metadata.citation_abstract ||\n    metadata.description ||\n    metadata.ogDescription ||\n    '';\n\n  const rawTitle = metadata.title || metadata.ogTitle || metadata['og:title'] || '';\n  const title = rawTitle.replace(/\\s*\\|\\s*Science\\s*$/i, '').trim();\n\n  return {\n    json: {\n      title:               title,\n      abstract:            bestContent,\n      editors_summary:     editorsSummary     || '',\n      structured_abstract: structuredAbstract || '',\n      plain_abstract:      plainAbstract      || '',\n      link:    metadata.url || metadata.ogUrl || metadata['og:url'] || '',\n      journal: 'Science'\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        624,
+        1392
+      ],
+      "id": "3ae861eb-8dcd-498f-af4a-3b9581e6becf",
+      "name": "提取文章内容1"
+    },
+    {
+      "parameters": {
+        "model": "google/gemini-2.5-flash",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        1648,
+        1552
+      ],
+      "id": "554ca24e-cb98-434b-b8f9-940c799226b2",
+      "name": "OpenRouter Chat Model (Science)1",
+      "credentials": {
+        "openRouterApi": {
+          "id": "REDACTED_OPENROUTER_CREDENTIAL_ID",
+          "name": "REDACTED_OPENROUTER_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "REDACTED_GOOGLE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "REDACTED_GOOGLE_SHEET_NAME",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/REDACTED_GOOGLE_SHEET_ID/edit"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "REDACTED_GOOGLE_SHEET_NAME",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/REDACTED_GOOGLE_SHEET_ID/edit"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -2352,
+        1472
+      ],
+      "id": "bc71395b-6712-4754-bf94-2cf4de6c18cd",
+      "name": "Get row(s) in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REDACTED_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "REDACTED_GOOGLE_SHEETS_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "a59bb474-3e61-4208-b9c7-2129ea032ec8",
+              "leftValue": "={{ $json.RSS_URL }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [
+        -2192,
+        1472
+      ],
+      "id": "50002cc6-4cf4-4ffb-b6ad-9caec6f7f2b3",
+      "name": "Filter"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -1984,
+        1456
+      ],
+      "id": "dad57c44-f048-4535-a816-3ef42a1e7b41",
+      "name": "Loop Over Items",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "name": "Replace Me",
+      "typeVersion": 1,
+      "position": [
+        -1600,
+        1456
+      ],
+      "id": "d46dbc62-e1da-401b-b5f0-dce6d19fdfab"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "3ec83692-4d9f-46fd-8c6e-08a65ee457d2",
+              "leftValue": "={{ new Date(($json.isoDate || $json.pubDate || $json.date || '').replace(' -', '').trim()).toISOString().split('T')[0] }}",
+              "rightValue": "={{ $now.setZone('UTC').minus({days: 1}).toFormat('yyyy-MM-dd') }}",
+              "operator": {
+                "type": "dateTime",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -1344,
+        1360
+      ],
+      "id": "b7aebda8-b62c-4aa9-8ae8-08633429ca65",
+      "name": "24H以内",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.RSS_URL }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [
+        -1568,
+        1216
+      ],
+      "id": "b8f422ea-f52a-4707-bc6d-f3965bd3ab8d",
+      "name": "nature RSS1",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=你是一个专注于抗衰老（anti-aging/longevity）领域的内容过滤器。不是编辑，不是作者，不要生成任何内容。\n判断这篇文章是否应该出现在一个\"抗衰老/长寿科学\"资讯平台上。\n\n## 判断标准（必须同时满足两条才算通过）\n\n### 条件1：主题直接性\n文章的【核心研究对象】或【核心事件】必须直接是以下之一：\n- 衰老的生物学机制（如端粒、表观遗传时钟、细胞衰老/senescence、线粒体衰退、干细胞耗竭、蛋白稳态失调等衰老hallmarks等）\n- 延长寿命或健康寿命的干预（热量限制、senolytics、NAD+前体、雷帕霉素、二甲双胍、运动/睡眠/饮食对衰老的影响等）\n- 衰老生物标志物和检测（生物年龄、衰老时钟、衰老细胞标记物）\n- 再生医学中直接针对衰老退化的方向\n- 长寿科学领域的产业、政策、人物动态\n\n### 条件2：排除间接关联\n以下内容即使和衰老\"有点关系\"也必须排除：\n- 某个老年常见病的具体临床治疗方案\n- 基础分子生物学发现，仅在讨论段提及\"可能与衰老有关\"\n- 药企商业新闻，除非直接涉及抗衰产品线\n- 癌症研究（除非涉及细胞衰老与癌症的交叉机制）\n- 感染、发育、生殖、儿科研究\n- 纯粹的流行病学统计\n- 标题含有撤稿、或更正之前的内容\n- 仅仅是\"研究对象是老年人\"但不涉及衰老机制的\n- 仅仅是与老年相关的病症的，比如黄斑变性、阿尔兹海默症、肌少症\n\n论文标题：{{ $json.title }}\n论文摘要：{{ $json.abstract }}\n\n请以纯JSON格式返回结果（直接输出JSON，不加任何代码块标记或其他文字）：\n{\"is_relevant\": true, \"confidence\": \"high\", \"reason\": \"简短说明（中文，30字以内）\"}\n\n注意：confidence 只能是 high、medium、low 之一；is_relevant 为 true 或 false",
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        832,
+        1392
+      ],
+      "id": "1761442d-bbf9-4634-8574-efcd3971b869",
+      "name": "AI抗衰相关性审核2"
+    },
+    {
+      "parameters": {
+        "options": {
+          "maxTokens": 256
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+      "typeVersion": 1,
+      "position": [
+        848,
+        1552
+      ],
+      "id": "21e2f01b-da04-4fa8-af3d-de6c6c927a91",
+      "name": "DeepSeek Chat Model3",
+      "credentials": {
+        "deepSeekApi": {
+          "id": "REDACTED_DEEPSEEK_CREDENTIAL_ID",
+          "name": "REDACTED_DEEPSEEK_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const allInputItems = $input.all();\nconst sourceItems = $('提取文章内容1').all();\n\nreturn allInputItems.map((item, i) => {\n  const rawText = (item.json.text || '').replace(/```json/g, '').replace(/```/g, '').trim();\n\n  let result = { is_relevant: false, confidence: 'low', reason: '解析失败' };\n  try {\n    result = JSON.parse(rawText);\n  } catch(e) {\n    const match = rawText.match(/\\{[^{}]+\\}/s);\n    if (match) {\n      try { result = JSON.parse(match[0]); } catch(e2) {}\n    }\n  }\n\n  const orig = (sourceItems[i] && sourceItems[i].json) ? sourceItems[i].json : {};\n\n  return {\n    json: {\n      title:               orig.title               || '',\n      abstract:            orig.abstract            || '',\n      editors_summary:     orig.editors_summary     || '',\n      structured_abstract: orig.structured_abstract || '',\n      plain_abstract:      orig.plain_abstract      || '',\n      link:                orig.link                || '',\n      journal:             orig.journal             || 'Science',\n      is_relevant:         result.is_relevant === true,\n      confidence:          result.confidence         || 'low',\n      relevance_reason:    result.reason             || ''\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        1392
+      ],
+      "id": "b5eb7eda-8c3e-4769-b586-a6e9952ad23e",
+      "name": "解析相关性结果2"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "sci-fc-if-cond",
+              "leftValue": "={{ $json.is_relevant }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1232,
+        1392
+      ],
+      "id": "8ec79e8c-6ab3-4a10-b71a-c319682a212c",
+      "name": "是否抗衰相关2"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "sci-fc-map-01",
+              "name": "original_title",
+              "value": "={{ $json.title }}",
+              "type": "string"
+            },
+            {
+              "id": "sci-fc-map-02",
+              "name": "content_for_ai",
+              "value": "={{ $json.abstract }}",
+              "type": "string"
+            },
+            {
+              "id": "sci-fc-map-03",
+              "name": "source_name",
+              "value": "={{ $('Loop Over Items').first().json.Name || 'Nature' }} {{ $('Loop Over Items').item.json.Source_Slug }}",
+              "type": "string"
+            },
+            {
+              "id": "sci-fc-map-04",
+              "name": "Impact_Factor",
+              "value": "={{ $('Loop Over Items').item.json.Impact_Factor }}",
+              "type": "string"
+            },
+            {
+              "id": "sci-fc-map-06",
+              "name": "link",
+              "value": "={{ $json.link }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1440,
+        1296
+      ],
+      "id": "c88ea749-7490-4c64-a919-59d5c2c2a271",
+      "name": "字段映射2"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=# Role\n你是一位资深抗衰媒体编辑。这篇内容已通过相关性审核，直接生成不了解医学知识的普通人都能看懂、且愿意点击的有吸引力的内容。\n\n# Input\n- 来源: {{ $json.source_name }} | IF: {{ $json.Impact_Factor }} | 信息质量: {{ $json.info_quality }}\n- 标题: {{ $json.original_title }}\n- 正文: {{ $json.content_for_ai }}\n\n# 写作规则\n1. 写成编辑takeaway，不是论文压缩版。首句=核心发现+对普通人的意义\n2. 禁止使用「研究揭示」「值得注意的是」「重磅消息」等空话。保留干预对象、机制、关键数据（如果有，保留P值即可）、转化意义\n3. 保留至少一个机构或作者。展望贴近科学事实但易懂性强\n4. info_quality=thin时只总结已有信息，不脑补\n5. 综述/评论/观点须明确证据属性\n\n## 策略\n120-160字，包括研究结论+研究机制与仅包含P值的数据+研究意义+普通人能听懂的一至两句话的展望\n\n## 中文标题：22-34字，根据内容重新生成的有吸引力的标题，符合中文阅读习惯，不夸大\n\n# Output Format (JSON Only)\n不要markdown代码块。\n{\n  \"translated_title\": \"根据内容重新生成的有吸引力的中文标题\",\n  \"summary\": \"中文快讯解读（编辑视角的takeaway）\",\n  \"translated_abstract\": \"将原文摘要/正文在保留原有核心数据和结论不变的前提下，翻译+解读为流畅专业的中文，不是逐句直译，而是用中文公众号科普媒体的表达习惯重新润色，保留关键数据和结论，让普通读者也能看懂并因为有趣继续看下去\",\n  \"seo_keywords\": \"根据内容生成3-5个中文SEO关键词，用逗号分隔，例如：表观遗传时钟,衰老干预,NAD+\"\n}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        1584,
+        1296
+      ],
+      "id": "30202d12-87e4-42b5-94e1-8ead0a6e9017",
+      "name": "内容生成AI3"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst allOriginals = $('字段映射2').all();\n\nconst results = [];\nfor (let i = 0; i < items.length; i++) {\n  const item = items[i];\n  const orig = allOriginals[i]?.json || {};\n\n  let finalSummary = '', finalTitle = '', translatedAbstract = '', seoKeywords = '';\n  try {\n    const raw = item.json.output || item.json.text || '';\n    const fo = raw.indexOf('{'), lc = raw.lastIndexOf('}');\n    if (fo !== -1 && lc !== -1) {\n      const p = JSON.parse(raw.substring(fo, lc + 1));\n      if (p.summary)             finalSummary       = p.summary;\n      if (p.translated_title)    finalTitle         = p.translated_title;\n      if (p.translated_abstract) translatedAbstract = p.translated_abstract;\n      if (p.seo_keywords)        seoKeywords        = p.seo_keywords;\n    }\n  } catch(e) {}\n\n  results.push({\n    json: {\n      ...orig,\n      is_relevant:         true,\n      summary:             finalSummary,\n      title:               finalTitle || orig.original_title || orig.title || '标题缺失',\n      translated_abstract: translatedAbstract,\n      seo_keywords:        seoKeywords\n    }\n  });\n}\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1824,
+        1392
+      ],
+      "id": "8c40af16-6671-404e-b75c-5d07a3767e96",
+      "name": "解析生成结果3"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const d = item.json;\n\n  const wpTitle      = d.title || d.original_title || '标题缺失';\n  const sourceInfo   = d.source_name || 'Science';\n  const impactFactor = d.Impact_Factor ? `（IF: ${d.Impact_Factor}）` : '';\n  const link         = d.link || d.original_link || '';\n\n  let wpContent = '';\n  if (d.translated_abstract) {\n    wpContent += `<p>${d.translated_abstract}</p>\\n\\n`;\n  }\n  wpContent += `<p>📎 来源：${sourceInfo}${impactFactor}`;\n  if (link) {\n    wpContent += ` | <a href=\"${link}\" target=\"_blank\" rel=\"noopener\">查看原文</a>`;\n  }\n  wpContent += `</p>`;\n\n  results.push({\n    json: {\n      wp_title:           wpTitle,\n      wp_content:         wpContent,\n      wp_excerpt:         d.summary || '',\n      wp_seo_keywords:    d.seo_keywords || '',\n      wp_seo_description: (d.summary || '').substring(0, 156),\n      original_link:      link,\n      source_name:        sourceInfo,\n      summary:            d.summary || ''\n    }\n  });\n}\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2032,
+        1392
+      ],
+      "id": "bb1d3d04-c0f4-49e7-b2d0-94c4dcebbadc",
+      "name": "计划发到Wordpress3"
+    },
+    {
+      "parameters": {
+        "title": "={{ $json.wp_title }}",
+        "additionalFields": {
+          "content": "={{ $json.wp_content }}",
+          "status": "draft",
+          "categories": [
+            14
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.wordpress",
+      "typeVersion": 1,
+      "position": [
+        2224,
+        1392
+      ],
+      "id": "9859f30e-1c23-47de-87a0-384c4b5c3160",
+      "name": "Create a post3",
+      "credentials": {
+        "wordpressApi": {
+          "id": "REDACTED_WORDPRESS_CREDENTIAL_ID",
+          "name": "REDACTED_WORDPRESS_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://your-wordpress-site.com/wp-json/wp/v2/posts/{{ $json.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "excerpt",
+              "value": "={{ $('计划发到Wordpress3').item.json.summary }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        2432,
+        1392
+      ],
+      "id": "b590253d-0037-4542-ae19-8521b68c7be3",
+      "name": "SEO和摘要3",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "REDACTED_HTTP_BASIC_AUTH_ID",
+          "name": "REDACTED_HTTP_BASIC_AUTH_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "REDACTED_GOOGLE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "REDACTED_GOOGLE_SHEET_NAME",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/REDACTED_GOOGLE_SHEET_ID/edit"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "REDACTED_GOOGLE_SHEET_NAME",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/REDACTED_GOOGLE_SHEET_ID/edit"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -2816,
+        2016
+      ],
+      "id": "4fe3c5bd-2ab7-473d-b9bf-8fda5d83bcd3",
+      "name": "Get row(s) in sheet1",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REDACTED_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "REDACTED_GOOGLE_SHEETS_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "a59bb474-3e61-4208-b9c7-2129ea032ec8",
+              "leftValue": "={{ $json.RSS_URL }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [
+        -2656,
+        2016
+      ],
+      "id": "0ab7587c-0a1e-4587-a6ca-abf0e0dcf283",
+      "name": "Filter1"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -2448,
+        2000
+      ],
+      "id": "2c68b333-1d4a-42ed-9654-03fac0fb67b9",
+      "name": "Loop Over Items1",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "name": "Replace Me1",
+      "typeVersion": 1,
+      "position": [
+        -1968,
+        2432
+      ],
+      "id": "ad2e008e-3f1e-4967-ac39-3223b6beb62d"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "3ec83692-4d9f-46fd-8c6e-08a65ee457d2",
+              "leftValue": "={{ new Date(($json.isoDate || $json.pubDate || $json.date || '').replace(' -', '').trim()).toISOString().split('T')[0] }}",
+              "rightValue": "={{ $now.setZone('UTC').minus({days: 1}).toFormat('yyyy-MM-dd') }}",
+              "operator": {
+                "type": "dateTime",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -1488,
+        2128
+      ],
+      "id": "60045471-0857-4e6d-8536-b94b8103c386",
+      "name": "24H以内1",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 把 RSS 的 /doi/abs/xxx?af=R 清理成 /doi/xxx 正式文章页\nreturn $input.all().map(item => {\n  const rawLink = item.json.link || '';\n  const cleanLink = rawLink\n    .replace('/doi/abs/', '/doi/')  // 去掉 /abs/ 变成正式文章页\n    .split('?')[0];                 // 去掉 ?af=R 等参数\n\n  return {\n    json: {\n      ...item.json,\n      link: cleanLink\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1216,
+        2112
+      ],
+      "id": "9219b6f1-4cdd-411e-94cc-97517b692f3e",
+      "name": "Code in JavaScript2"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.RSS_URL }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -1936,
+        2192
+      ],
+      "id": "b65af3c9-47a0-4aac-9578-ba07ce1ec41f",
+      "name": "获取RSS原始XML",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 从 HTTP 获取的原始 RSS/XML 文本中解析所有条目（含 dc:type）\nconst xmlText = $input.first().json.data;\nif (!xmlText) return [{ json: { error: '未获取到XML内容' } }];\n\n// 通用字段提取：支持 dc:creator、content:encoded 等带冒号的标签\nfunction getTag(xml, tag) {\n  const esc = tag.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&').replace(/:/g, '\\\\:');\n  const re = new RegExp('<' + esc + '[^>]*>([\\\\s\\\\S]*?)<\\\\/' + esc + '>', 'i');\n  const m = xml.match(re);\n  if (!m) return '';\n  return m[1].replace(/<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>/g, '$1').trim();\n}\n\n// 拆分 <item ...> ... </item> 块（兼容 RSS 1.0 RDF 和 RSS 2.0）\nconst parts = xmlText.split(/<item[\\s>]/i);\nconst items = parts.slice(1).map(p => {\n  const end = p.indexOf('</item>');\n  return end !== -1 ? p.substring(0, end) : p;\n}).filter(p => p.trim());\n\nreturn items.map(block => {\n  const link        = getTag(block, 'link');\n  const dcType      = getTag(block, 'dc:type');\n  const dcCreator   = getTag(block, 'dc:creator');\n  const dcDate      = getTag(block, 'dc:date');\n  const dcSource    = getTag(block, 'dc:source');\n  const encoded     = getTag(block, 'content:encoded');\n  const description = getTag(block, 'description');\n\n  return {\n    json: {\n      title:                   getTag(block, 'title'),\n      link:                    link,\n      'dc:type':               dcType,\n      'dc:creator':            dcCreator,\n      'dc:date':               dcDate,\n      'dc:source':             dcSource,\n      source:                  dcSource,\n      date:                    dcDate,\n      isoDate:                 dcDate,\n      pubDate:                 dcDate,\n      creator:                 dcCreator,\n      description:             description,\n      content:                 encoded || description,\n      'content:encoded':       encoded,\n      'content:encodedSnippet': description,\n      contentSnippet:          description,\n      guid:                    link,\n    }\n  };\n}).filter(item => item.json.link !== '');"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1776,
+        2240
+      ],
+      "id": "a936ef75-c78d-4df0-aba0-ee97d30794fc",
+      "name": "解析RSS字段"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "iq-check",
+              "leftValue": "={{ $json.info_quality }}",
+              "rightValue": "rich",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        304,
+        2192
+      ],
+      "id": "315ffba5-dd46-4570-bc4e-41c999025c68",
+      "name": "按信息质量分流1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nreturn items.map(item => ({\n  json: {\n    title: item.json.title || item.json.original_title,\n    link: item.json.link || item.json.original_link,\n    source_name: item.json.source_name || item.json.Journal_Name,\n    info_quality: item.json.info_quality,\n    priority: item.json.priority || item.json.Priority,\n    content_preview: (item.json.content_for_ai || '').substring(0, 300)\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        608,
+        2336
+      ],
+      "id": "dfb6ff3d-a6f9-4c74-99b1-84b5006630e7",
+      "name": "收集待审核项(稀薄信息)1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "rel-check",
+              "leftValue": "={{ $json.is_relevant }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2144,
+        2144
+      ],
+      "id": "10d3c313-a54a-4724-9eeb-63b9f7bdb669",
+      "name": "有内容?1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst results = [];\nfor (const item of items) {\n  const json = item.json;\n  let loopItem = {};\n  try { loopItem = $('Loop Over Items1').first().json; } catch(e) { loopItem = {}; }\n  const sourceName = (loopItem.Name || json.source || '未知来源').trim();\n  const priority = (loopItem.Priority || 'A').toString().toUpperCase();\n  let authorStr = json.creator || json['dc:creator'] || json.author || '';\n  let instStr = '';\n  if (json.metadata) {\n    if (json.metadata.citation_author) authorStr = Array.isArray(json.metadata.citation_author) ? json.metadata.citation_author[0] + '等' : json.metadata.citation_author;\n    if (json.metadata.citation_author_institution) instStr = Array.isArray(json.metadata.citation_author_institution) ? json.metadata.citation_author_institution[0] : json.metadata.citation_author_institution;\n  }\n  const authorInfo = (instStr ? '机构：' + instStr + ' | ' : '') + (authorStr ? '作者：' + authorStr : '');\n  const rawTitle = (json.title || '').trim();\n  const rawLink = json.link || json.guid || '';\n  const rawBody = json['content:encoded'] || json.content || json.article_content || '';\n  const rawSnippet = json.description || json.contentSnippet || '';\n  function deepClean(text) {\n    if (!text) return '';\n    return text.replace(/<script[\\s\\S]*?<\\/script>/gi,'').replace(/<style[\\s\\S]*?<\\/style>/gi,'').replace(/<!--[\\s\\S]*?-->/g,'').replace(/<img[^>]*>/gi,'').replace(/<a[^>]*>(.*?)<\\/a>/gi,'$1').replace(/<\\/?(?:div|span|p|br|hr|ul|ol|li|table|tr|td|th|thead|tbody|header|footer|nav|aside|section|article|figure|figcaption|h[1-6])[^>]*>/gi,' ').replace(/<[^>]+>/g,'').replace(/&nbsp;/gi,' ').replace(/&amp;/gi,'&').replace(/&lt;/gi,'<').replace(/&gt;/gi,'>').replace(/&quot;/gi,'\"').replace(/&#\\d+;/g,' ').replace(/&[a-zA-Z]+;/g,' ').replace(/\\{[^}]{0,200}\\}/g,' ').replace(/\\s+/g,' ').trim();\n  }\n  const cleanBody = deepClean(rawBody);\n  const cleanSnippet = deepClean(rawSnippet);\n  let contentForAI = '标题：' + rawTitle + '\\n';\n  if (authorInfo) contentForAI += '研究团队：' + authorInfo + '\\n';\n  if (cleanBody.length > 200) contentForAI += '正文：' + cleanBody;\n  else if (cleanSnippet.length > 50) { contentForAI += '摘要：' + cleanSnippet; if (cleanBody.length > 0) contentForAI += '\\n补充：' + cleanBody; }\n  else contentForAI += '内容：' + (cleanBody || cleanSnippet || '仅有标题，无正文或摘要');\n  const textLen = contentForAI.replace(/标题：.*\\n/,'').replace(/研究团队：.*\\n/,'').length;\n  let infoQuality = 'rich';\n  if (textLen < 100) infoQuality = 'title_only';\n  else if (textLen < 200) infoQuality = 'thin';\n  const maxLen = infoQuality === 'rich' ? 8000 : 6000;\n  if (contentForAI.length > maxLen) contentForAI = contentForAI.substring(0, maxLen);\n  results.push({ json: { content_for_ai: contentForAI, info_quality: infoQuality, source_name: sourceName, original_title: rawTitle, original_link: rawLink, link: rawLink, priority: priority, title: rawTitle, Journal_Name: sourceName, Impact_Factor: loopItem.Impact_Factor || '', Manual_Stars: loopItem.Manual_Stars || '', Priority: priority, Description: loopItem.Description || '', Topic_Tags: loopItem.Topic_Tags || '', Category: loopItem.Category || '' } });\n}\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        112,
+        2224
+      ],
+      "id": "42ccd2c5-9d30-4f04-992a-e968607e51dd",
+      "name": "数据清洗V1"
+    },
+    {
+      "parameters": {
+        "model": "google/gemini-2.5-flash",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        2384
+      ],
+      "id": "b7dd131f-afbc-4a84-bcd7-9cb8b110f0f7",
+      "name": "OpenRouter Chat Model (生成)",
+      "credentials": {
+        "openRouterApi": {
+          "id": "REDACTED_OPENROUTER_CREDENTIAL_ID",
+          "name": "REDACTED_OPENROUTER_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "pass-check",
+              "leftValue": "={{ $json.gatekeeper_pass }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1408,
+        2112
+      ],
+      "id": "ac0ccb31-b9ca-49b6-af60-a2bb115e12f1",
+      "name": "通过筛选?1"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=你是一个内容过滤器。不是编辑，不是作者，不要生成任何内容。\n判断这篇文章是否应该出现在一个\"抗衰老/长寿科学\"资讯平台上。\n\n## 判断标准（必须同时满足两条才算通过）\n\n### 条件1：主题直接性\n文章的【核心研究对象】或【核心事件】必须直接是以下之一：\n- 衰老的生物学机制（如端粒、表观遗传时钟、细胞衰老/senescence、线粒体衰退、干细胞耗竭、蛋白稳态失调等衰老hallmarks等）\n- 延长寿命或健康寿命的干预（热量限制、senolytics、NAD+前体、雷帕霉素、二甲双胍、运动/睡眠/饮食对衰老的影响等）\n- 衰老生物标志物和检测（生物年龄、衰老时钟、衰老细胞标记物）\n- 再生医学中直接针对衰老退化的方向\n- 长寿科学领域的产业、政策、人物动态\n\n### 条件2：排除间接关联\n以下内容即使和衰老\"有点关系\"也必须排除：\n- 某个老年常见病的具体临床治疗方案\n- 基础分子生物学发现，仅在讨论段提及\"可能与衰老有关\"\n- 药企商业新闻，除非直接涉及抗衰产品线\n- 癌症研究（除非涉及细胞衰老与癌症的交叉机制）\n- 感染、发育、生殖、儿科研究\n- 纯粹的流行病学统计\n- 标题含有撤稿、或更正之前的内容\n- 仅仅是\"研究对象是老年人\"但不涉及衰老机制的\n- 仅仅是与老年相关的病症的，比如黄斑变性、阿尔兹海默症、肌少症\n\n## 输入\n来源：{{ $json.source_name }}\n{{ $json.content_for_ai }}\n\n## 输出\n只输出JSON，不要解释：\n{\"pass\": true或false, \"reason\": \"10字以内\"}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        832,
+        2128
+      ],
+      "id": "6708a19c-5ef3-4caa-b7a6-01069a4cdcad",
+      "name": "守门员AI"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst allOriginals = $('按信息质量分流1').all();\n\nconst results = [];\nfor (let i = 0; i < items.length; i++) {\n  const item = items[i];\n  const orig = allOriginals[i]?.json || {};\n  \n  let pass = false, reason = '';\n  try {\n    // 兼容 Agent节点(output) 和 HTTP Request节点(choices)\n    let content = item.json.output || item.json.choices?.[0]?.message?.content || '';\n    \n    // 去掉markdown代码块标记\n    content = content.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\n    \n    // 如果没有花括号，手动补上\n    if (!content.startsWith('{')) {\n      content = '{' + content + '}';\n    }\n    \n    const fo = content.indexOf('{'), lc = content.lastIndexOf('}');\n    if (fo !== -1 && lc !== -1) {\n      const p = JSON.parse(content.substring(fo, lc + 1));\n      pass = p.pass === true;\n      reason = p.reason || '';\n    }\n  } catch(e) { pass = false; reason = '解析失败: ' + e.message; }\n\n  results.push({\n    json: {\n      ...orig,\n      gatekeeper_pass: pass,\n      gatekeeper_reason: reason\n    }\n  });\n}\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1184,
+        2128
+      ],
+      "id": "d0357e8b-40c0-4c78-a71d-cd8b1e167a57",
+      "name": "解析守门员结果1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nlet finalReport = \"\";\n\n// === 0. 获取当前日期 ===\nconst today = new Date();\nconst dateStr = `${today.getMonth() + 1}月${today.getDate()}日`;\nfinalReport += `📅 **长寿抗衰日报 | ${dateStr}**\\n\\n`;\n\n// === 1. 数据分桶 (先分类，再生成) ===\nlet sLevelItems = [];\nlet aLevelItems = [];\n\nfor (const item of items) {\n  // 忽略不相关的内容\n  if (item.json.is_relevant === false) continue;\n\n  // 获取优先级 (防呆：转大写，处理 undefined)\n  const priority = (item.json.Priority || \"\").toString().toUpperCase();\n\n  // 获取摘要 (关键修正：读取 summary 字段)\n  const summary = item.json.summary || item.json.text || \"摘要生成失败\";\n  \n  // 准备好要在报告里用的数据对象\n  const reportItem = {\n    title: item.json.title,\n    summary: summary,\n    link: item.json.link,\n    source: item.json.Journal_Name || item.json.source_name || \"来源未知\",\n    ifScore: item.json.Impact_Factor || \"\",\n    stars: item.json.Manual_Stars || \"\"\n  };\n\n  if (priority.includes('S')) {\n    sLevelItems.push(reportItem);\n  } else {\n    // 剩下的都归为 A 级 (包括 A级、空值等)\n    aLevelItems.push(reportItem);\n  }\n}\n\n// === 2. 生成 S 级板块 (重磅) ===\nfinalReport += `🚀 **【重磅关注】**\\n`;\nif (sLevelItems.length > 0) {\n  sLevelItems.forEach((item, index) => {\n    // 格式：标题\n    finalReport += `**${item.title}**\\n`;\n    \n    // 格式：来源 + IF (如果有)\n    let metaInfo = `📜 ${item.source}`;\n    if (item.ifScore && item.ifScore != '0') metaInfo += ` (IF: ${item.ifScore})`;\n    if (item.stars) metaInfo += ` ${item.stars}`;\n    finalReport += `${metaInfo}\\n`;\n    \n    // 格式：摘要 (S级摘要通常较长，直接放)\n    finalReport += `${item.summary}\\n`;\n    finalReport += `🔗 (${item.link})\\n\\n`; // Markdown链接更整洁\n    if (index < sLevelItems.length - 1) finalReport += `————————————\\n\\n`;\n  });\n} else {\n  finalReport += `(今日暂无 S 级重磅更新)\\n\\n`;\n}\n\nfinalReport += `————————————\\n\\n`; // S和A之间的分割线\n\n// === 3. 生成 A 级板块 (简讯) ===\nfinalReport += `📰 **【行业简讯】**\\n\\n`;\nif (aLevelItems.length > 0) {\n  aLevelItems.forEach((item, index) => {\n    // 像 S 级一样，标题独立成行，去掉数字序号\n    finalReport += `**${item.title}**\\n`;\n    \n    // 摘要紧跟其后，去掉缩进，更利于阅读\n    finalReport += `${item.summary}\\n`;\n    \n    // 统一改成友好的 Markdown 超链接格式\n    finalReport += `🔗 (${item.link})\\n\\n`;\n    \n    // 增加一条比 S 级稍轻的虚线分割线，提升排版质感\n    if (index < aLevelItems.length - 1) finalReport += `┈┈┈┈┈┈┈┈┈┈┈┈\\n\\n`;\n  });\n} else {\n  finalReport += `(今日暂无其他资讯)\\n`;\n}\n\n// === 4. 输出 ===\nreturn [{ json: { text_report: finalReport } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2448,
+        2016
+      ],
+      "id": "34f930b2-c7ab-430e-8c86-9406cb93b55c",
+      "name": "组装快讯"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst allOriginals = $('通过筛选?1').all();\n\nfor (let i = 0; i < items.length; i++) {\n  const item = items[i];\n  const orig = allOriginals[i]?.json || {};\n  \n  let finalSummary = '', finalTitle = '', translatedAbstract = '', seoKeywords = '';\n  try {\n    const raw = item.json.output || item.json.text || '';\n    const fo = raw.indexOf('{'), lc = raw.lastIndexOf('}');\n    if (fo !== -1 && lc !== -1) {\n      const p = JSON.parse(raw.substring(fo, lc + 1));\n      if (p.summary) finalSummary = p.summary;\n      if (p.translated_title) finalTitle = p.translated_title;\n      if (p.translated_abstract) translatedAbstract = p.translated_abstract;\n      if (p.seo_keywords) seoKeywords = p.seo_keywords;\n    }\n  } catch(e) {}\n\n  item.json = {\n    ...orig,\n    is_relevant: true,\n    summary: finalSummary,\n    title: finalTitle || orig.original_title || '标题缺失',\n    translated_abstract: translatedAbstract,\n    seo_keywords: seoKeywords\n  };\n}\nreturn items;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1984,
+        2128
+      ],
+      "id": "25eeed9b-006e-466c-8aba-04ed4632d913",
+      "name": "解析生成结果"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=# Role\n你是一位资深抗衰媒体编辑。这篇内容已通过相关性审核，直接生成不了解医学知识的普通人都能看懂、且愿意点击的有吸引力的内容。\n\n# Input\n- 来源: {{ $json.source_name }} | IF: {{ $json.Impact_Factor }} | 信息质量: {{ $json.info_quality }}\n- 标题: {{ $json.original_title }}\n- 正文: {{ $json.content_for_ai }}\n\n# 写作规则\n1. 写成编辑takeaway，不是论文压缩版。首句=核心发现+对普通人的意义\n2. 禁止\"研究揭示\"\"值得注意的是\"“重磅消息”等空话。保留干预对象、机制、关键数据（如果有，保留P值即可）、转化意义\n3. 保留至少一个机构/作者。展望贴近科学事实但是易懂性强\n4. info_quality=thin时只总结已有信息，不脑补\n5. 综述/评论/观点须明确证据属性\n\n## 策略\n120-160字，包括研究结论+研究机制与仅包含P值的数据+研究意义+普通人能听懂的一至两句话的展望\n\n## 中文标题：22-34字，根据内容重新生成的有吸引力的标题，中文习惯，不夸大\n\n# Output Format (JSON Only)\n不要markdown代码块。\n{\n  \"translated_title\": \"根据内容重新生成的有吸引力的中文标题\",\n  \"summary\": \"中文快讯解读（编辑视角的takeaway）\",\n  \"translated_abstract\": \"将原文摘要/正文在保留原有核心数据和结论不变的前提下，翻译+解读为流畅专业的中文，不是逐句直译，而是用中文公众号科普媒体的表达习惯重新润色，保留关键数据和结论，让普通的不懂医学的读者都能看懂，并且因为有趣继续看下去\",\n  \"seo_keywords\": \"作为一个SEO专家，根据内容生成3-5个中文SEO关键词，用逗号分隔，如：表观遗传时钟,衰老干预,NAD+\"\n}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        1680,
+        2096
+      ],
+      "id": "ae08d1c7-fd18-496f-b4f8-e145ca07cb94",
+      "name": "内容生成AI"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const d = item.json;\n  \n  const wpTitle = d.title || d.original_title || '标题缺失';\n  const sourceInfo = d.Journal_Name || d.source_name || '';\n  const impactFactor = d.Impact_Factor ? `（IF: ${d.Impact_Factor}）` : '';\n  const link = d.original_link || d.link || '';\n  \n  // 正文：AI解读（加粗）+ AI翻译润色后的摘要 + 来源\n  let wpContent = '';\n  \n  if (d.translated_abstract) {\n    wpContent += `<p>${d.translated_abstract}</p>\\n\\n`;\n  }\n  \n  wpContent += `<p>📎 来源：${sourceInfo}${impactFactor}`;\n  if (link) {\n    wpContent += ` | <a href=\"${link}\" target=\"_blank\" rel=\"noopener\">查看原文</a>`;\n  }\n  wpContent += `</p>`;\n  \n  results.push({\n    json: {\n      wp_title: wpTitle,\n      wp_content: wpContent,\n      wp_excerpt: d.summary || '',\n      wp_seo_keyword: d.seo_keywords || '',\n      wp_seo_description: (d.summary || '').substring(0, 156),\n      original_link: link,\n      source_name: sourceInfo\n    }\n  });\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2496,
+        2176
+      ],
+      "id": "1b249964-d1be-4dab-bea9-da536fb270a3",
+      "name": "计划发到Wordpress"
+    },
+    {
+      "parameters": {
+        "title": "={{ $json.wp_title }}",
+        "additionalFields": {
+          "content": "={{ $json.wp_content }}",
+          "status": "draft",
+          "categories": [
+            14
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.wordpress",
+      "typeVersion": 1,
+      "position": [
+        2704,
+        2176
+      ],
+      "id": "2cf785f3-30fe-43de-93a6-ed8028031f08",
+      "name": "Create a post",
+      "credentials": {
+        "wordpressApi": {
+          "id": "REDACTED_WORDPRESS_CREDENTIAL_ID",
+          "name": "REDACTED_WORDPRESS_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://your-wordpress-site.com/wp-json/wp/v2/posts/{{ $json.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "excerpt",
+              "value": "={{ $('有内容?1').item.json.summary }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        2992,
+        2176
+      ],
+      "id": "9c95af18-7961-405b-b12a-2922049b13f2",
+      "name": "SEO和摘要",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "REDACTED_HTTP_BASIC_AUTH_ID",
+          "name": "REDACTED_HTTP_BASIC_AUTH_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.firecrawl.dev/v1/scrape",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $credentials.firecrawlApi.apiKey }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({url: $json.link, formats: ['markdown'], onlyMainContent: true, waitFor: 2000}) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -656,
+        1920
+      ],
+      "id": "38f8c881-b782-41c4-a1f6-61000c9f2e87",
+      "name": "HTTP: 文章详情页",
+      "credentials": {
+        "firecrawlApi": {
+          "id": "REDACTED_FIRECRAWL_CREDENTIAL_ID",
+          "name": "REDACTED_FIRECRAWL_CREDENTIAL_NAME"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 从 Firecrawl 返回的 Markdown 中提取 Nature 文章摘要\n// 替换原来解析HTML的「提取摘要和作者」节点\n// 配对上游「24H以内1」保留 RSS 原始字段\n\nfunction extractSection(markdown, sectionName) {\n  const escaped = sectionName.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');\n  const regex = new RegExp('##\\\\s+' + escaped + '\\\\s*\\\\n([\\\\s\\\\S]*?)(?=\\\\n##\\\\s|$)', 'i');\n  const match = markdown.match(regex);\n  if (match && match[1]) {\n    return match[1]\n      .replace(/!\\[.*?\\]\\(.*?\\)/g, '')\n      .replace(/\\[([^\\]]+)\\]\\([^)]+\\)/g, '$1')\n      .replace(/\\n{3,}/g, '\\n\\n')\n      .trim();\n  }\n  return null;\n}\n\nconst items = $input.all();\nconst originals = $('24H以内1').all();\n\nreturn items.map((item, i) => {\n  // Firecrawl 单页抓取结果在 data 下\n  const markdown = item.json.data?.markdown || item.json.markdown || '';\n  const metadata = item.json.data?.metadata || item.json.metadata || {};\n  const orig = (originals[i] && originals[i].json) ? originals[i].json : {};\n\n  // 按优先级提取摘要（Nature文章结构）\n  const abstract =\n    extractSection(markdown, 'Abstract') ||\n    extractSection(markdown, 'Summary') ||\n    extractSection(markdown, 'Main') ||\n    metadata.description ||\n    metadata.ogDescription ||\n    orig.contentSnippet ||\n    orig.content ||\n    '';\n\n  // 清理标题：去掉 \" | Nature Metabolism\" 等后缀\n  const rawTitle = metadata.title || metadata.ogTitle || orig.title || '';\n  const title = rawTitle.replace(/\\s*\\|.*$/, '').trim() || orig.title || '';\n\n  // 提取作者（优先 metadata，回退 RSS dc:creator）\n  const authorArr = metadata.citation_author;\n  const authors = Array.isArray(authorArr)\n    ? (authorArr.length > 3 ? authorArr.slice(0, 3).join(', ') + ' 等' : authorArr.join(', '))\n    : (metadata.citation_author || orig.creator || orig['dc:creator'] || '');\n\n  const fullAbstract = abstract;\n\n  return {\n    json: {\n      // 下游 Edit Fields3 / 数据清洗V 需要的字段，保持与原 HTTP 版一致\n      title:              title,\n      link:               metadata.url || metadata.ogUrl || orig.link || '',\n      pubDate:            orig.pubDate || orig.isoDate || '',\n      isoDate:            orig.isoDate || orig.pubDate || '',\n      creator:            authors,\n      'dc:creator':       authors,\n      full_abstract:      fullAbstract,\n      content:            fullAbstract,\n      'content:encoded':  fullAbstract,\n      description:        fullAbstract,\n      contentSnippet:     fullAbstract.substring(0, 300),\n      guid:               orig.guid || '',\n      categories:         orig.categories || '',\n      extraction_note:    fullAbstract\n        ? `Firecrawl成功提取${fullAbstract.length}字摘要`\n        : '未提取到摘要，使用RSS原始内容'\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -416,
+        1920
+      ],
+      "id": "2f7dfe60-674f-437c-87bf-5b96dacb05a9",
+      "name": "提取摘要和作者"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "f97752e2-7371-4687-adcd-b71cf67edbaf",
+              "leftValue": "={{ $json['dc:type'] }}",
+              "rightValue": "Research",
+              "operator": {
+                "type": "string",
+                "operation": "contains",
+                "name": "filter.operator.contains"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [
+        -1632,
+        2256
+      ],
+      "id": "2a36fc77-0352-4fee-aff0-3250a4b11621",
+      "name": "Filter2"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "57ac6b22-2d29-41c4-b8f8-4f1e711863e5",
+              "name": "article_content",
+              "value": "={{ $json.full_abstract || $json[\"content:encoded\"] || $json.content || $json.description || $json.summary }}",
+              "type": "string"
+            },
+            {
+              "id": "eb504514-583c-419c-bc5a-c3ceb4b029c9",
+              "name": "title",
+              "value": "={{ $json.title }}",
+              "type": "string"
+            },
+            {
+              "id": "aafc77d2-e342-4fe4-bda4-59915c7d36ae",
+              "name": "link",
+              "value": "={{ $json.link ? $json.link : $('Loop Over Items1').item.json.RSS_URL }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -128,
+        1968
+      ],
+      "id": "772bdb4e-ad7e-4e3c-b361-55dd735e4db2",
+      "name": "Edit Fields2"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+      "typeVersion": 1,
+      "position": [
+        848,
+        2336
+      ],
+      "id": "ff501a39-58c1-4636-b568-e709002216c9",
+      "name": "DeepSeek Chat Model1",
+      "credentials": {
+        "deepSeekApi": {
+          "id": "REDACTED_DEEPSEEK_CREDENTIAL_ID",
+          "name": "REDACTED_DEEPSEEK_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -992,
+        2016
+      ],
+      "id": "3f5b63f4-54e0-43be-8bfd-aa305d75814b",
+      "name": "Loop Over Items2"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "name": "Replace Me2",
+      "typeVersion": 1,
+      "position": [
+        80,
+        2640
+      ],
+      "id": "5a3c25b5-8216-41eb-a992-510a8dfe4e06"
+    },
+    {
+      "parameters": {
+        "amount": 10
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -224,
+        2384
+      ],
+      "id": "a9b6cf58-265b-490d-bc28-908705073054",
+      "name": "Wait1",
+      "webhookId": "REDACTED_WEBHOOK_ID"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -3040,
+        1472
+      ],
+      "id": "b22e2751-6e6b-48c0-9ddc-5b32e4a3cf30",
+      "name": "Schedule Trigger"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Edit Fields1": {
+      "main": [
+        [
+          {
+            "node": "HTTP: Cell 列表",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DeepSeek Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Basic LLM Chain": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "HTTP: Cell 批量爬取",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP: Cell 批量爬取": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "HTTP: Cell 批量状态",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP: Cell 列表": {
+      "main": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP: Cell 批量状态": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "AI抗衰相关性审核",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DeepSeek Chat Model2": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI抗衰相关性审核",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI抗衰相关性审核": {
+      "main": [
+        [
+          {
+            "node": "解析相关性结果",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "解析相关性结果": {
+      "main": [
+        [
+          {
+            "node": "是否抗衰相关",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "是否抗衰相关": {
+      "main": [
+        [
+          {
+            "node": "字段映射1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "OpenRouter Chat Model (Cell)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "内容生成AI1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "字段映射1": {
+      "main": [
+        [
+          {
+            "node": "内容生成AI1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "内容生成AI1": {
+      "main": [
+        [
+          {
+            "node": "解析生成结果1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "解析生成结果1": {
+      "main": [
+        [
+          {
+            "node": "计划发到Wordpress1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "计划发到Wordpress1": {
+      "main": [
+        [
+          {
+            "node": "Create a post1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create a post1": {
+      "main": [
+        [
+          {
+            "node": "SEO和摘要1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "汇总文章URL": {
+      "main": [
+        [
+          {
+            "node": "HTTP: Science RSS 批量爬取",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP: Science RSS 批量爬取": {
+      "main": [
+        [
+          {
+            "node": "等待抓取完成",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "等待抓取完成": {
+      "main": [
+        [
+          {
+            "node": "HTTP: Science RSS 批量状态",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP: Science RSS 批量状态": {
+      "main": [
+        [
+          {
+            "node": "展开为独立条目1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "展开为独立条目1": {
+      "main": [
+        [
+          {
+            "node": "提取文章内容1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "提取文章内容1": {
+      "main": [
+        [
+          {
+            "node": "AI抗衰相关性审核2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model (Science)1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "内容生成AI3",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s) in sheet": {
+      "main": [
+        [
+          {
+            "node": "Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [],
+        [
+          {
+            "node": "nature RSS1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Replace Me",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Replace Me": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "24H以内": {
+      "main": [
+        [
+          {
+            "node": "汇总文章URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "nature RSS1": {
+      "main": [
+        [
+          {
+            "node": "24H以内",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI抗衰相关性审核2": {
+      "main": [
+        [
+          {
+            "node": "解析相关性结果2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DeepSeek Chat Model3": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI抗衰相关性审核2",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "解析相关性结果2": {
+      "main": [
+        [
+          {
+            "node": "是否抗衰相关2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "是否抗衰相关2": {
+      "main": [
+        [
+          {
+            "node": "字段映射2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "字段映射2": {
+      "main": [
+        [
+          {
+            "node": "内容生成AI3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "内容生成AI3": {
+      "main": [
+        [
+          {
+            "node": "解析生成结果3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "解析生成结果3": {
+      "main": [
+        [
+          {
+            "node": "计划发到Wordpress3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "计划发到Wordpress3": {
+      "main": [
+        [
+          {
+            "node": "Create a post3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create a post3": {
+      "main": [
+        [
+          {
+            "node": "SEO和摘要3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s) in sheet1": {
+      "main": [
+        [
+          {
+            "node": "Filter1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter1": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items1": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Replace Me1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "获取RSS原始XML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Replace Me1": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "24H以内1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "获取RSS原始XML": {
+      "main": [
+        [
+          {
+            "node": "解析RSS字段",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "解析RSS字段": {
+      "main": [
+        [
+          {
+            "node": "Filter2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "按信息质量分流1": {
+      "main": [
+        [
+          {
+            "node": "守门员AI",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "收集待审核项(稀薄信息)1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "有内容?1": {
+      "main": [
+        [
+          {
+            "node": "组装快讯",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "计划发到Wordpress",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "数据清洗V1": {
+      "main": [
+        [
+          {
+            "node": "按信息质量分流1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model (生成)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "内容生成AI",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "通过筛选?1": {
+      "main": [
+        [
+          {
+            "node": "内容生成AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "守门员AI": {
+      "main": [
+        [
+          {
+            "node": "解析守门员结果1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "解析守门员结果1": {
+      "main": [
+        [
+          {
+            "node": "通过筛选?1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "解析生成结果": {
+      "main": [
+        [
+          {
+            "node": "有内容?1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "内容生成AI": {
+      "main": [
+        [
+          {
+            "node": "解析生成结果",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "计划发到Wordpress": {
+      "main": [
+        [
+          {
+            "node": "Create a post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create a post": {
+      "main": [
+        [
+          {
+            "node": "SEO和摘要",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP: 文章详情页": {
+      "main": [
+        [
+          {
+            "node": "提取摘要和作者",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "提取摘要和作者": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter2": {
+      "main": [
+        [
+          {
+            "node": "24H以内1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields2": {
+      "main": [
+        [
+          {
+            "node": "数据清洗V1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DeepSeek Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "守门员AI",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items2": {
+      "main": [
+        [],
+        [
+          {
+            "node": "HTTP: 文章详情页",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Wait1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Replace Me2": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait1": {
+      "main": [
+        [
+          {
+            "node": "Replace Me2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get row(s) in sheet",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get row(s) in sheet1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false,
+    "timeSavedMode": "fixed",
+    "timezone": "Asia/Shanghai",
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "0mP_PYKddiGBzUsFAYaVA"
+  },
+  "versionId": "REDACTED_VERSION_ID",
+  "meta": {
+    "templateCredsSetupCompleted": "REDACTED_TEMPLATECREDSSETUPCOMPLETED",
+    "instanceId": "REDACTED_INSTANCEID"
+  },
+  "id": "VWyGP_HSjqWql7n0JoquC",
+  "tags": []
+}
