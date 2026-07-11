@@ -1,0 +1,832 @@
+{
+  "name": "Knowledge Base Vectorization Pipeline (Redacted)",
+  "nodes": [
+    {
+      "parameters": {
+        "url": "https://longevityforesight.com/wp-json/wp/v2/posts",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "per_page",
+              "value": "100"
+            },
+            {
+              "name": "orderby",
+              "value": "date"
+            },
+            {
+              "name": "order",
+              "value": "desc"
+            },
+            {
+              "name": "_fields",
+              "value": "id,slug,title,excerpt,content,link,date,categories,tags"
+            },
+            {
+              "name": "after",
+              "value": "={{ new Date(Date.now() - 25*60*60*1000).toISOString() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        192,
+        0
+      ],
+      "id": "fc6bec01-6b71-4f9c-97f1-c0d30406989c",
+      "name": "HTTP Request",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "REDACTED_HTTP_BASIC_AUTH_CREDENTIAL_ID",
+          "name": "REDACTED_HTTP_BASIC_AUTH_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// 空数据保护:如果没有新文章,直接结束\nconst rawItem = $input.item.json;\nif (!rawItem || !rawItem.title) {\n  return { json: { _skip: true } };\n}\n\n// 处理所有文章(n8n 会自动把每个 item 单独跑一次)\nconst wpPost = $input.item.json;\n\n// HTML 转纯文本的小函数:去掉所有 HTML 标签,解码常见实体\nfunction stripHtml(html) {\n  if (!html) return '';\n  return html\n    .replace(/<br\\s*\\/?>/gi, '\\n')           // <br> 转换行\n    .replace(/<\\/p>/gi, '\\n\\n')              // </p> 转双换行\n    .replace(/<[^>]+>/g, '')                 // 删所有其他标签\n    .replace(/&nbsp;/g, ' ')\n    .replace(/&amp;/g, '&')\n    .replace(/&lt;/g, '<')\n    .replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"')\n    .replace(/&#8217;/g, \"'\")\n    .replace(/&#8220;/g, '\"')\n    .replace(/&#8221;/g, '\"')\n    .replace(/\\n{3,}/g, '\\n\\n')              // 压缩多余换行\n    .trim();\n}\n\n// 提取核心字段\nconst title = stripHtml(wpPost.title?.rendered || '');\nconst summary = stripHtml(wpPost.excerpt?.rendered || '');\nconst fullContent = stripHtml(wpPost.content?.rendered || '');\nconst url = wpPost.link || '';\n\n// 日期格式化:WordPress 返回 \"2026-04-09T14:30:00\",数据库要 \"2026-04-09\"\nconst pubDate = (wpPost.date || '').substring(0, 10);\n\n// 生成 slug:优先用 WP 的 slug,做 URL 解码 + 安全处理\nlet cleanSlug;\ntry {\n  // WordPress 默认会把中文 slug 做 URL 编码,这里解码回中文\n  cleanSlug = wpPost.slug ? decodeURIComponent(wpPost.slug) : '';\n} catch (e) {\n  // decodeURIComponent 失败的话直接用原始 slug\n  cleanSlug = wpPost.slug || '';\n}\n\n// 如果解码后仍是空或全是垃圾字符,用 wp_id 兜底\nif (!cleanSlug || cleanSlug.length < 2) {\n  cleanSlug = `wp-${wpPost.id}`;\n}\n\n// 限制长度:中文每字 3 字节,数据库虽然能存超长,但 slug 太长不利于 URL 和管理\n// 取前 50 个字符\nif (cleanSlug.length > 50) {\n  cleanSlug = cleanSlug.substring(0, 50);\n}\n\n// 最终拼装:日期 + slug,例如 \"2026-04-14-女性专属抗衰旅程-goddess-retreats\"\nconst slug = `${pubDate}-${cleanSlug}`;\n\n// source 字段:因为这是从你自己的 WordPress 来的,默认标记为 WordPress 原创\n// 未来从 RSS 抓的内容,这里会是 \"Longevity.Technology\" 等\nconst source = 'Longevity Foresight 原创';\n\n// has_chunks 先标 false,后续如果跑切片流程再 UPDATE\nconst hasChunks = false;\n\n// 判断是否需要切片(阶段 2 才实际做,现在只是标记)\nconst needsChunking = fullContent.length > 1000;\n\nreturn {\n  json: {\n    wp_id: wpPost.id,           // 保留 WordPress 原 ID,万一后续要回查\n    slug: slug,\n    title: title,\n    summary: summary,\n    full_content: fullContent || null,   // 没有全文就传 null\n    url: url,\n    pub_date: pubDate,\n    source: source,\n    has_chunks: hasChunks,\n    needs_chunking: needsChunking,       // 内部标记,不入库\n    content_length: fullContent.length   // 供调试\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        -128
+      ],
+      "id": "fa9a7953-f5b4-4d43-b4d6-460d570a9f49",
+      "name": "Clean_WP_Data"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.siliconflow.cn/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: \"deepseek-ai/DeepSeek-V3\",\n  messages: [\n    {\n      role: \"system\",\n      content: \"你是一位资深的抗衰老(longevity)领域资讯分类专家,熟悉从衰老生物学到产业动态的全景。你的任务是根据下面的受控词表,为一篇中文抗衰资讯打上多维标签。\\n\\n══════════════ 核心规则(必须严格遵守)══════════════\\n\\n1. 【只选不创】所有标签必须从下方词表中选择。严禁创造、翻译、改写词表之外的标签。\\n2. 【留空优于乱打】如果某条轴没有任何标签置信度达到 0.6,该轴返回空数组 [] 或 null,禁止为填满而硬选。\\n3. 【核心叙事主线归类】Category 是互斥单选,按文章的核心叙事主线归类,不按内容比重。例如'某公司融资开发基于端粒机制的药物',叙事主线是融资→归'行业动态',不是'衰老机制研究'。\\n4. 【证据等级选最高级】evidence 选文章所报告的最高证据等级。一篇同时回顾动物实验和人体试验的文章,打'人体临床'。\\n5. 【轴A vs 轴B 区分】轴A回答'用什么东西干预',轴B回答'生物学上发生了什么'。一篇文章常常两个都要打——如'雷帕霉素通过抑制mTOR延长寿命',轴A打mTOR抑制剂,轴B打mTOR。\\n6. 【只输出JSON】不要任何解释、前言、markdown代码块。输出必须是一个可被JSON.parse解析的纯JSON对象。\\n\\n══════════════ Category 主分类(7选1,单值字符串)══════════════\\n\\n• 衰老机制研究 —— 解释生物学原理(为什么衰老、某通路如何工作)。触发词:机制 mechanism pathway hallmarks of aging\\n• 干预手段 —— 介绍某个具体干预方式的原理/研发进展/使用方法。触发词:治疗 therapy 补剂 药物 preclinical\\n• 临床进展 —— 某项人体临床试验的启动/进行中/结果/监管进展。必须涉及人体。触发词:clinical trial Phase 1/2/3 FDA approval\\n• 生活方式 —— 个人可自主执行的日常行为干预。触发词:运动 饮食 断食 睡眠 冷暴露 冥想\\n• 行业动态 —— 商业事件或行业政策。触发词:融资 funding 估值 IPO 并购 公司成立 FDA政策\\n• 检测与评估 —— 如何测量衰老或健康状态。触发词:生物年龄 biological age epigenetic clock biomarker 可穿戴设备监测\\n• 人物与观点 —— 呈现某人物的观点、经历、方法论。典型:长访谈/自述/博客。触发词:访谈 播客 podcast 专栏 opinion\\n\\n══════════════ 轴A · substance 干预对象(数组,可多选)══════════════\\n\\n• NAD+类 —— 触发:NAD+ NMN NR NADH 烟酰胺核苷。合并逻辑:NMN/NR/NADH 都归此类,不单列。\\n• mTOR抑制剂 —— 触发:雷帕霉素 rapamycin sirolimus everolimus rapalog。仅指作为药物的mTOR抑制剂。\\n• 双胍类 —— 触发:metformin 二甲双胍 TAME phenformin\\n• Senolytics —— 触发:senolytics 衰老细胞清除 达沙替尼 非瑟酮 navitoclax\\n• 多酚类 —— 触发:白藜芦醇 resveratrol 姜黄素 curcumin EGCG pterostilbene\\n• 多胺类 —— 触发:亚精胺 spermidine 精胺 腐胺 putrescine\\n• 代谢调节剂 —— 触发:GLP-1 司美格鲁肽 semaglutide Ozempic 替尔泊肽 α-酮戊二酸 AKG\\n• 基因疗法 —— 触发:gene therapy AAV CRISPR 基因编辑 partial reprogramming OSKM Yamanaka factors\\n• 细胞疗法/重编程 —— 触发:cell therapy cellular reprogramming 部分重编程 iPSC 外泌体\\n• 干细胞 —— 触发:stem cell MSC HSC 干细胞移植。指治疗手段,不是机制。\\n• 器官再生 —— 触发:organ regeneration 异种移植 xenotransplantation organoid\\n• 血浆年轻因子 —— 触发:young blood 年轻血液 plasma parabiosis 异体共生 GDF11\\n\\n══════════════ 轴B · mechanism 机制通路(数组,可多选)══════════════\\n\\n• 端粒 —— telomere telomerase TERT 端粒酶 染色体末端\\n• 表观遗传时钟 —— epigenetic clock DNA甲基化 Horvath clock GrimAge PhenoAge\\n• 线粒体 —— mitochondria mtDNA OXPHOS mitophagy Urolithin A\\n• 细胞衰老 —— cellular senescence SASP p16 p21。严格指senescence生物学状态。\\n• 自噬 —— autophagy ULK1 LC3 溶酶体降解\\n• mTOR —— mTORC1 mTORC2 (讨论通路机制本身时打)\\n• AMPK —— AMP激活蛋白激酶 energy sensor\\n• Sirtuins —— SIRT1 SIRT3 SIRT6 NAD+-dependent deacetylase。常与NAD+共现。\\n• 炎症衰老 —— inflammaging chronic inflammation NLRP3 IL-6。专指慢性低度炎症随龄累积。\\n• 干细胞耗竭 —— stem cell exhaustion 组织再生能力下降\\n• 蛋白质稳态 —— proteostasis 蛋白质错误折叠 protein aggregation HSP\\n• 肠脑轴微生物组 —— gut microbiome 肠道菌群 microbiota gut-brain axis SCFA\\n\\n══════════════ 轴C · organ 器官系统(数组,全身性抗衰留空)══════════════\\n\\n• 大脑神经 —— 神经退行 阿尔茨海默 帕金森 认知 痴呆\\n• 心血管 —— 动脉硬化 血压 胆固醇 冠心病\\n• 代谢肝脏 —— NAFLD 脂肪肝 胰岛素抵抗 diabetes(抗衰语境)\\n• 肾脏 —— kidney renal CKD\\n• 皮肤 —— 皱纹 光老化 collagen\\n• 肌肉骨骼 —— muscle 肌少症 sarcopenia 骨质疏松 关节\\n• 免疫系统 —— immunosenescence T cell aging 胸腺\\n• 肠道 —— gut 肠道器官 肠道屏障 IBD\\n• 生殖与激素 —— reproductive 卵巢 睾丸 更年期 HRT 生育力\\n\\n══════════════ 轴D · evidence 证据等级(单选,极重要)══════════════\\n\\n• 人体临床 —— 在人体上前瞻性干预试验(RCT Phase1/2/3)\\n• 动物模型 —— 小鼠 大鼠 果蝇 线虫 非人灵长类\\n• 体外实验 —— 仅培养皿/试管(无活体)\\n• 流行病学 —— 大规模人群观察(UK Biobank NHANES 队列)无干预\\n• 综述观点 —— 无新原始数据(综述 访谈 播客 融资新闻默认归此)\\n\\n══════════════ 轴E · source_tag 来源(单选)══════════════\\n\\nNature主刊 / Nature Aging / Nature子刊-其他 / Cell主刊 / Cell Metabolism / Cell Stem Cell / Cell子刊-其他 / Aging Cell / Science系 / NEJM / Lancet系 / PNAS / GeroScience / Aging-US / EMBO Journal / Aging Research Reviews / JMIR Aging / Age and Ageing / Advanced Science / 其他学术期刊 / Longevity.Technology / Lifespan.io / Fight Aging! / Endpoints News / Fierce Biotech / EurekAlert! / NIH News / Businesswire / PR Newswire / Global News / 行业媒体-其他 / Drive(Peter Attia) / Optispan / FoundMyFitness / Huberman Lab / Ground Truths / Buck Institute Podcast / 播客-其他 / 公司公告 / WordPress原创\\n\\n原则:A媒体报道B期刊论文时打A(实际来源)。本站原创打WordPress原创。\\n\\n══════════════ 轴F · person(数组,仅这22人)══════════════\\n\\nDavid Sinclair / Peter Attia / Aubrey de Grey / Nir Barzilai / Steve Horvath / Matt Kaeberlein / Andrew Huberman / Bryan Johnson / Shinya Yamanaka / Leonard Guarente / Valter Longo / Rhonda Patrick / Brian Kennedy / George Church / Charles Brenner / Eric Verdin / Richard A. Miller / Vera Gorbunova / David Furman / Mehmood Khan / Alex Zhavoronkov / Linda Partridge\\n\\n规则:必须是讨论此人工作或明确引用此人观点。不在列表的人放入 person_other。\\n\\n══════════════ 轴G · org(数组,仅这28个)══════════════\\n\\n抗衰公司:Altos Labs / Calico / Life Biosciences / Retro Biosciences / BioAge Labs / Insilico Medicine / Loyal / Unity Biotechnology / Rejuvenate Bio / NewLimit / Tally Health / ChromaDex / Elysium Health / Juvenescence / Hevolution Foundation\\n\\n学术机构:哈佛医学院 / MIT / 斯坦福 / Buck Institute / Salk Institute / Broad Institute / 爱因斯坦医学院 / USC长寿研究所 / 罗切斯特大学 / 密歇根大学 / 新加坡国立大学 / 马普衰老所 / UCL\\n\\n规则:只打正在被讨论的机构,不打顺带提及。不在列表的放入 org_other。\\n\\n══════════════ 输出格式(严格遵守)══════════════\\n\\n只输出下面这个JSON对象:\\n\\n{\\\"category\\\":\\\"...\\\",\\\"substance\\\":[],\\\"mechanism\\\":[],\\\"organ\\\":[],\\\"evidence\\\":\\\"...\\\",\\\"source_tag\\\":\\\"...\\\",\\\"person\\\":[],\\\"person_other\\\":[],\\\"org\\\":[],\\\"org_other\\\":[]}\"\n    },\n    {\n      role: \"user\",\n      content: \"请为以下中文抗衰资讯打标,严格按照受控词表选择:\\n\\n【标题】\\n\" + $json.title + \"\\n\\n【摘要】\\n\" + $json.summary + \"\\n\\n【正文(前1500字)】\\n\" + ($json.full_content ? $json.full_content.substring(0, 1500) : \"(无正文)\") + \"\\n\\n【当前标注的来源】\" + ($json.source || \"未标注\") + \"\\n\\n只输出JSON对象。\"\n    }\n  ],\n  temperature: 0.2,\n  response_format: { type: \"json_object\" }\n}) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1200,
+        -240
+      ],
+      "id": "f08ba4ec-7960-46fe-a996-e9b4983d758a",
+      "name": "HTTP Request1",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REDACTED_HTTP_HEADER_AUTH_CREDENTIAL_ID",
+          "name": "REDACTED_HTTP_HEADER_AUTH_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// 拿到节点 4(DeepSeek)的返回\nconst aiResponse = $input.item.json\nconst rawContent = aiResponse.choices?.[0]?.message?.content || '';\n\n// 清洗可能的 markdown 代码块包裹\nlet cleanedContent = rawContent.trim();\nif (cleanedContent.startsWith('```')) {\n  cleanedContent = cleanedContent\n    .replace(/^```(?:json)?\\s*/i, '')\n    .replace(/\\s*```\\s*$/, '')\n    .trim();\n}\n\n// 解析 JSON,加异常保护\nlet tags;\ntry {\n  tags = JSON.parse(cleanedContent);\n} catch (e) {\n  console.log('AI 返回解析失败,原文:', rawContent);\n  tags = {\n    category: null,\n    substance: [],\n    mechanism: [],\n    organ: [],\n    evidence: null,\n    source_tag: null,\n    person: [],\n    person_other: [],\n    org: [],\n    org_other: [],\n    _parse_error: rawContent.substring(0, 300)\n  };\n}\n\n// 从节点 3(Clean_WP_Data)拿清洗后的文章数据\nconst article = $('Clean_WP_Data').item.json;\n\n// 提取 category 为独立字段(写入 articles.category 列)\n// metadata 里只保留其他轴\nconst category = tags.category || null;\nconst metadata = {\n  substance: tags.substance || [],\n  mechanism: tags.mechanism || [],\n  organ: tags.organ || [],\n  evidence: tags.evidence || null,\n  source_tag: tags.source_tag || null,\n  person: tags.person || [],\n  person_other: tags.person_other || [],\n  org: tags.org || [],\n  org_other: tags.org_other || []\n};\n\n// 如果解析失败,把错误记录下来\nif (tags._parse_error) {\n  metadata._parse_error = tags._parse_error;\n}\n\n// 准备给 embedding API 的输入文本(用标题+摘要,不用全文)\nconst textToEmbed = `${article.title}。${article.summary}`;\n\nreturn {\n  json: {\n    // 原始文章字段\n    slug: article.slug,\n    title: article.title,\n    summary: article.summary,\n    full_content: article.full_content,\n    url: article.url,\n    pub_date: article.pub_date,\n    source: article.source,\n    has_chunks: article.has_chunks,\n    \n    // AI 打标结果\n    category: category,\n    metadata: metadata,\n    \n    // 给下一节点(embedding)用\n    text_to_embed: textToEmbed\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1376,
+        -224
+      ],
+      "id": "96908989-fb17-4a75-b376-1f6c854da62b",
+      "name": "Parse_Tags"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.siliconflow.cn/v1/embeddings",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: \"BAAI/bge-m3\",\n  input: $json.text_to_embed,\n  encoding_format: \"float\"\n}) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1568,
+        -256
+      ],
+      "id": "c6a5e8ad-0ddb-41c2-af8f-629ed313bd7d",
+      "name": "Generate_Embedding",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REDACTED_HTTP_HEADER_AUTH_CREDENTIAL_ID",
+          "name": "REDACTED_HTTP_HEADER_AUTH_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// 从节点 6 拿 embedding 向量\nconst embeddingResponse = $input.item.json;\nconst embedding = embeddingResponse.data?.[0]?.embedding;\n\n// 安全校验:维度必须是 1024\nif (!embedding || embedding.length !== 1024) {\n  throw new Error(`Embedding 异常: 预期 1024 维, 实际 ${embedding ? embedding.length : 0} 维`);\n}\n\n// 从节点 5(Parse_Tags)拿完整数据\nconst article = $('Parse_Tags').item.json;\n\n// PGVector 接受的向量格式是字符串: '[0.1,0.2,0.3]'\nconst embeddingStr = '[' + embedding.join(',') + ']';\n\nreturn {\n  json: {\n    slug: article.slug,\n    title: article.title,\n    summary: article.summary,\n    full_content: article.full_content,\n    url: article.url,\n    pub_date: article.pub_date,\n    source: article.source,\n    category: article.category,\n    metadata: article.metadata,\n    summary_embedding: embeddingStr,\n    has_chunks: article.has_chunks\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1728,
+        -224
+      ],
+      "id": "9dbd8b8a-bec9-47f5-bd50-32bea6335d0a",
+      "name": "Assemble_For_DB"
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "schema": {
+          "__rl": true,
+          "mode": "list",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "value": "articles",
+          "mode": "list",
+          "cachedResultName": "articles"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {
+            "has_chunks": false
+          },
+          "matchingColumns": [
+            "slug"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "slug",
+              "displayName": "slug",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "summary",
+              "displayName": "summary",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "full_content",
+              "displayName": "full_content",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "url",
+              "displayName": "url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "pub_date",
+              "displayName": "pub_date",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "category",
+              "displayName": "category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "metadata",
+              "displayName": "metadata",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "object",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "summary_embedding",
+              "displayName": "summary_embedding",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "has_chunks",
+              "displayName": "has_chunks",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "updated_at",
+              "displayName": "updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1904,
+        -208
+      ],
+      "id": "478dc828-b75f-40e3-8b35-72451081c222",
+      "name": "Insert_Article",
+      "credentials": {
+        "postgres": {
+          "id": "REDACTED_POSTGRES_CREDENTIAL_ID",
+          "name": "REDACTED_POSTGRES_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "ad1bc12c-eb6c-4ba7-ae1e-18dd6090f7da",
+              "leftValue": "=={{ $('Clean_WP_Data').item.json.needs_chunking }}\n",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2080,
+        -176
+      ],
+      "id": "f643c510-90f9-4fcd-bedd-787a68ff6f39",
+      "name": "Need_Chunking"
+    },
+    {
+      "parameters": {
+        "jsCode": "const insertedArticle = $input.all()[0].json;\nconst articleId = insertedArticle.id;\n\nconst articleData = $('Clean_WP_Data').item.json;\nconst fullContent = articleData.full_content || '';\nconst title = articleData.title || '';\n\nif (!articleId) {\n  throw new Error('未拿到 article_id');\n}\n\nif (!fullContent || fullContent.length < 100) {\n  throw new Error('full_content 异常短,不应进入切片流程');\n}\n\nconst CHUNK_SIZE = 400;\nconst OVERLAP = 60;\nconst MIN_CHUNK_LENGTH = 30;\n\nfunction findBestCutPoint(text, targetPos, searchRange) {\n  // 在 targetPos 前后 searchRange 范围内找最佳切点\n  const start = Math.max(0, targetPos - searchRange);\n  const end = Math.min(text.length, targetPos + searchRange);\n  const segment = text.substring(start, end);\n  \n  // 按优先级定义切点模式\n  const patterns = [\n    /\\n\\n/g,              // 段落分隔(最优)\n    /\\n/g,                // 换行\n    /[。！？；!?;]/g,      // 句末标点\n    /[，、,]/g,            // 句中标点\n    /\\s/g                 // 空格(英文词边界)\n  ];\n  \n  for (const pattern of patterns) {\n    pattern.lastIndex = 0;\n    let bestPos = -1;\n    let bestDist = Infinity;\n    let match;\n    \n    while ((match = pattern.exec(segment)) !== null) {\n      const absPos = start + match.index;\n      const dist = Math.abs(absPos - targetPos);\n      // 优先选 targetPos 之前的(当前片段稍短),但之后的也接受\n      if (dist < bestDist) {\n        bestDist = dist;\n        bestPos = absPos;\n      }\n    }\n    \n    if (bestPos !== -1) {\n      return bestPos + 1;  // +1 把标点包含在当前片段\n    }\n  }\n  \n  return -1;  // 没找到任何切点\n}\n\nfunction splitIntoChunks(text) {\n  const chunks = [];\n  let start = 0;\n  let safetyCounter = 0;\n  const maxIterations = Math.ceil(text.length / (CHUNK_SIZE - OVERLAP)) + 10;\n  \n  while (start < text.length) {\n    // 防死循环\n    safetyCounter++;\n    if (safetyCounter > maxIterations) {\n      // 把剩余文本作为最后一片\n      const remaining = text.substring(start).trim();\n      if (remaining.length > MIN_CHUNK_LENGTH) {\n        chunks.push(remaining);\n      }\n      break;\n    }\n    \n    let end = Math.min(start + CHUNK_SIZE, text.length);\n    \n    // 如果还没到文本末尾,寻找最佳切点\n    if (end < text.length) {\n      const cutPoint = findBestCutPoint(text, end, 80);\n      if (cutPoint !== -1 && cutPoint > start + 50) {\n        // 切点必须比起点至少远 50 字,否则会产生过短片段\n        end = cutPoint;\n      }\n      // 如果没找到切点,就在 end 处硬切(极罕见)\n    }\n    \n    const chunk = text.substring(start, end).trim();\n    if (chunk.length > MIN_CHUNK_LENGTH) {\n      chunks.push(chunk);\n    }\n    \n    // 计算下一片的起点\n    const nextStart = end - OVERLAP;\n    \n    // 确保 start 一定往前推进,防止死循环\n    if (nextStart <= start) {\n      start = end;  // 强制从 end 开始,不重叠\n    } else {\n      start = nextStart;\n    }\n    \n    // 已经处理到文本末尾\n    if (end >= text.length) break;\n  }\n  \n  return chunks;\n}\n\nconst chunks = splitIntoChunks(fullContent);\n\nreturn chunks.map((content, index) => ({\n  json: {\n    article_id: articleId,\n    chunk_index: index,\n    content: content,\n    token_count: Math.ceil(content.length / 1.5),\n    text_to_embed: `${title}。${content}`\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2256,
+        -256
+      ],
+      "id": "6346d06a-c69e-4fcb-8994-1d5095da5356",
+      "name": "Split_Chunks"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.siliconflow.cn/v1/embeddings",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: \"BAAI/bge-m3\",\n  input: $json.text_to_embed,\n  encoding_format: \"float\"\n}) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        2432,
+        -336
+      ],
+      "id": "5c24d594-4e27-4857-8d56-ed6cfb3573f6",
+      "name": "Chunk_Embedding",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REDACTED_HTTP_HEADER_AUTH_CREDENTIAL_ID",
+          "name": "REDACTED_HTTP_HEADER_AUTH_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// 当前 node 的 input 包含 5 个 items(每个是 embedding API 的返回)\n// 我们要从 Split_Chunks 拿到每片的 article_id/chunk_index/content/token_count\n// 然后把 embedding 向量拼上\n\nconst allItems = $input.all();\nconst results = [];\n\nfor (let i = 0; i < allItems.length; i++) {\n  const embedResponse = allItems[i].json;\n  const embedding = embedResponse.data?.[0]?.embedding;\n  \n  if (!embedding || embedding.length !== 1024) {\n    throw new Error(`第 ${i} 片 embedding 异常,维度 ${embedding ? embedding.length : 0}`);\n  }\n  \n  // 从 Split_Chunks 取对应索引的原始数据\n  const chunkData = $('Split_Chunks').all()[i].json;\n  \n  // PGVector 向量字符串格式\n  const embeddingStr = '[' + embedding.join(',') + ']';\n  \n  results.push({\n    json: {\n      article_id: chunkData.article_id,\n      chunk_index: chunkData.chunk_index,\n      content: chunkData.content,\n      token_count: chunkData.token_count,\n      embedding: embeddingStr\n    }\n  });\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        -336
+      ],
+      "id": "1f625eb0-ad0b-4400-bb13-baf4eeab351a",
+      "name": "Prepare_Chunks_For_DB"
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "schema": {
+          "__rl": true,
+          "mode": "list",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "value": "article_chunks",
+          "mode": "list",
+          "cachedResultName": "article_chunks"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "article_id",
+            "chunk_index"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "article_id",
+              "displayName": "article_id",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "chunk_index",
+              "displayName": "chunk_index",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "content",
+              "displayName": "content",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "token_count",
+              "displayName": "token_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "embedding",
+              "displayName": "embedding",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2848,
+        -352
+      ],
+      "id": "fabaadfb-036a-4020-85dd-c04adf27506e",
+      "name": "Insert_Chunks",
+      "credentials": {
+        "postgres": {
+          "id": "REDACTED_POSTGRES_CREDENTIAL_ID",
+          "name": "REDACTED_POSTGRES_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE articles \nSET has_chunks = true, updated_at = NOW()\nWHERE id = '{{ $json.article_id }}'",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        3056,
+        -352
+      ],
+      "id": "859a8b3e-7701-457b-ac0f-689919c560dd",
+      "name": "Mark_Has_Chunks",
+      "credentials": {
+        "postgres": {
+          "id": "REDACTED_POSTGRES_CREDENTIAL_ID",
+          "name": "REDACTED_POSTGRES_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "name": "Replace Me",
+      "typeVersion": 1,
+      "position": [
+        3312,
+        96
+      ],
+      "id": "0d4a2c48-ec5f-4db7-bd07-77883b495529"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        512,
+        -144
+      ],
+      "id": "972c5803-cd60-4f64-a3a9-43eabe9babca",
+      "name": "Batch_Loop"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 0 * * *"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "id": "94082933-4822-484d-ae94-e89ccfeeb51d",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "929464e5-ac14-4e14-aadd-87f181b730ec",
+              "leftValue": "={{ $json._skip }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        992,
+        -144
+      ],
+      "id": "e574acfc-b84a-40aa-a5ac-54cca685af35",
+      "name": "Skip_Empty"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Batch_Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clean_WP_Data": {
+      "main": [
+        [
+          {
+            "node": "Skip_Empty",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request1": {
+      "main": [
+        [
+          {
+            "node": "Parse_Tags",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse_Tags": {
+      "main": [
+        [
+          {
+            "node": "Generate_Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate_Embedding": {
+      "main": [
+        [
+          {
+            "node": "Assemble_For_DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble_For_DB": {
+      "main": [
+        [
+          {
+            "node": "Insert_Article",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert_Article": {
+      "main": [
+        [
+          {
+            "node": "Need_Chunking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Need_Chunking": {
+      "main": [
+        [
+          {
+            "node": "Split_Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Replace Me",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split_Chunks": {
+      "main": [
+        [
+          {
+            "node": "Chunk_Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chunk_Embedding": {
+      "main": [
+        [
+          {
+            "node": "Prepare_Chunks_For_DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare_Chunks_For_DB": {
+      "main": [
+        [
+          {
+            "node": "Insert_Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert_Chunks": {
+      "main": [
+        [
+          {
+            "node": "Mark_Has_Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Replace Me": {
+      "main": [
+        [
+          {
+            "node": "Batch_Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Batch_Loop": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Clean_WP_Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark_Has_Chunks": {
+      "main": [
+        [
+          {
+            "node": "Replace Me",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip_Empty": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Replace Me",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false,
+    "timeSavedMode": "fixed",
+    "timezone": "Asia/Shanghai",
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "0mP_PYKddiGBzUsFAYaVA"
+  },
+  "versionId": "REDACTED_VERSION_ID",
+  "meta": {
+    "templateCredsSetupCompleted": "REDACTED_TEMPLATE_CREDS_STATUS",
+    "instanceId": "REDACTED_INSTANCE_ID"
+  },
+  "id": "REDACTED_WORKFLOW_ID",
+  "tags": []
+}

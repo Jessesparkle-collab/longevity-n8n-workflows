@@ -1,0 +1,448 @@
+{
+  "name": "X Trend Discovery & Content Ops Pipeline (Redacted)",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "const queries = [\n  'longevity OR anti-aging OR aging research OR healthspan OR lifespan',\n  'NAD+ OR NMN OR rapamycin OR senolytics OR metformin OR resveratrol',\n  'intermittent fasting OR cold exposure OR sauna health OR biological age OR epigenetic clock OR telomere'\n];\n\nreturn queries.map((q, idx) => {\n  const prompt = 'You are a content scout for a health and longevity media brand. Find the MOST ENGAGED posts from the LAST 8 HOURS about:\\n\\n' + q + '\\n\\nPrioritize posts with HIGH REPLY COUNTS. Skip promotional spam and low-effort posts.\\n\\nFor each post found, return data in this EXACT JSON array format (no markdown, no code fences, ONLY the JSON array):\\n[\\n  {\\n    \"author_name\": \"Display name\",\\n    \"author_handle\": \"@handle\",\\n    \"author_follower_count\": 0,\\n    \"full_text\": \"Full text of the post\",\\n    \"tweet_url\": \"actual URL from search results\",\\n    \"posted_at_iso\": \"ISO date\",\\n    \"like_count\": 0,\\n    \"repost_count\": 0,\\n    \"reply_count\": 0,\\n    \"view_count\": 0,\\n    \"is_quote_tweet\": false,\\n    \"quoted_text\": \"\",\\n    \"discussion_summary\": \"Brief note on what people seem to be discussing\"\\n  }\\n]\\n\\nReturn ONLY the JSON array, nothing else.';\n\n  const bodyJson = {\n    model: 'grok-4-1-fast',\n    input: [\n      { role: 'user', content: prompt }\n    ],\n    tools: [\n      { type: 'x_search' }\n    ]\n  };\n\n  return {\n    json: {\n      batchIndex: idx,\n      bodyJson: JSON.stringify(bodyJson)\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -256,
+        1232
+      ],
+      "id": "b42ccc8c-aa98-44b5-9edd-909be2480518",
+      "name": "构建Grok搜索请求1"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.x.ai/v1/responses",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_XAI_API_KEY"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.bodyJson }}",
+        "options": {
+          "timeout": 180000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -16,
+        1232
+      ],
+      "id": "eb0634f7-7eaa-436b-8162-a1feb33406c7",
+      "name": "调用Grok搜索热帖1",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "const uniqueTweets = new Map();\n\nfor (const item of $input.all()) {\n  let raw = '';\n\n  // xAI Responses API format: output is an array of blocks\n  const output = item.json.output;\n  if (Array.isArray(output)) {\n    for (const block of output) {\n      // message type blocks contain content array\n      if (block.type === 'message' && Array.isArray(block.content)) {\n        for (const c of block.content) {\n          if (c.text) raw += c.text;\n        }\n      }\n    }\n  }\n  // fallback paths\n  if (!raw && typeof item.json.output === 'string') {\n    raw = item.json.output;\n  }\n  if (!raw) {\n    raw = item.json.output_text || '';\n  }\n\n  const cleaned = raw.replace(/```json|```/g, '').trim();\n\n  // Try to extract JSON array even if wrapped in text\n  let jsonStr = cleaned;\n  const arrMatch = cleaned.match(/\\[\\s*\\{[\\s\\S]*\\}\\s*\\]/);\n  if (arrMatch) jsonStr = arrMatch[0];\n\n  try {\n    const tweets = JSON.parse(jsonStr);\n    if (!Array.isArray(tweets)) continue;\n    for (const t of tweets) {\n      const key = t.tweet_url || t.full_text;\n      if (!key || uniqueTweets.has(key)) continue;\n      t.source_pipeline = 'hot_topic';\n      t.fetched_at = new Date().toISOString();\n      t.like_count = Number(t.like_count) || 0;\n      t.repost_count = Number(t.repost_count) || 0;\n      t.reply_count = Number(t.reply_count) || 0;\n      t.view_count = Number(t.view_count) || 0;\n      t.author_follower_count = Number(t.author_follower_count) || 10000;\n      uniqueTweets.set(key, t);\n    }\n  } catch (e) {\n    console.error('Parse failed:', e.message);\n    console.error('Raw preview:', raw.substring(0, 300));\n  }\n}\n\nconst results = Array.from(uniqueTweets.values());\nif (results.length === 0) {\n  return [{ json: { _empty: true, message: 'No posts found this round' } }];\n}\nreturn results.map(t => ({ json: t }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        1232
+      ],
+      "id": "d0317aec-cc47-4c59-906a-e55ac4ec128d",
+      "name": "解析去重1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nconst kolHandles = new Set([\n  '@Mangan150', '@EricTopol', '@davidasinclair', '@bryan_johnson',\n  '@BuckInstitute', '@DrKristieLeong', '@DrMorganLevine', '@HarvardHealth',\n  '@foundmyfitness', '@NirBarzilaiMD', '@DrBStanfield', '@CharlesMBrenner',\n  '@mkaeberlein', '@aubreydegrey'\n]);\n\nconst scored = [];\nfor (const item of items) {\n  const t = item.json;\n  if (t._empty) continue;\n  if (kolHandles.has(t.author_handle)) continue;\n  if ((t.reply_count || 0) < 5) continue;\n  if ((t.like_count || 0) < 20) continue;\n  const replyRatio = t.reply_count / Math.max(t.like_count, 1);\n  if (replyRatio < 0.03) continue;\n  t.engagement_score = Math.round(t.reply_count * 5 + t.repost_count * 2 + t.like_count * 0.5);\n  t.reply_ratio = Math.round(replyRatio * 100) / 100;\n  scored.push(t);\n}\n\nscored.sort((a, b) => b.engagement_score - a.engagement_score);\nconst top5 = scored.slice(0, 5);\n\nif (top5.length === 0) {\n  return [];\n}\n\nreturn top5.map((t, i) => {\n  t.rank = i + 1;\n  return { json: t };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        464,
+        1232
+      ],
+      "id": "32b1751f-98b9-4861-b2dd-269d173e9dde",
+      "name": "评分筛选排除KOL1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const t = item.json;\n  if (t._empty) continue;\n  const prompt = '你是某个抗衰资讯的中文内容编辑。你精通X的社媒运营，也精通专业的抗衰知识。下面给你一条来自 X 的英文健康/生命科学领域热门推文。请输出严格 JSON：\\n\\n{\\n  \"translation_cn\": \"信达雅的中文翻译，保留专业术语\",\\n  \"longevity_angle\": \"如果不直接关于长寿，用一句话(20字内)说可以从什么长寿视角切入；如果本身就是长寿话题，写核心赛道\",\\n  \"hook_tip\": \"一句话(25字内)：这条值得一个做长寿媒体的账号运营者去蹭评论的核心理由 + 建议的回复内容方向（比如质疑/补数据/有趣类比），最好加一推特原生真人用户的回复实例\",\\n  \"comment_vibe\": \"根据互动数据推测评论区氛围（争议激烈/一边倒支持/质疑声多/科普讨论为主），15字内\"\\n}\\n\\n推文作者: ' + t.author_name + ' (@' + t.author_handle + ')\\n推文内容: ' + t.full_text + '\\n互动: ❤️' + t.like_count + ' 🔁' + t.repost_count + ' 💬' + t.reply_count + '\\n' + (t.discussion_summary ? '讨论摘要: ' + t.discussion_summary : '') + '\\n\\n只返回 JSON，不要任何解释或 markdown。';\n  results.push({\n    json: {\n      prompt: prompt,\n      orig_rank: t.rank || 0,\n      orig_author_name: '' + (t.author_name || ''),\n      orig_author_handle: '' + (t.author_handle || ''),\n      orig_full_text: '' + (t.full_text || ''),\n      orig_tweet_url: '' + (t.tweet_url || ''),\n      orig_like_count: t.like_count || 0,\n      orig_repost_count: t.repost_count || 0,\n      orig_reply_count: t.reply_count || 0,\n      orig_view_count: t.view_count || 0,\n      orig_engagement_score: t.engagement_score || 0,\n      orig_reply_ratio: t.reply_ratio || 0\n    }\n  });\n}\n\nif (results.length === 0) return [{ json: { _empty: true } }];\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        752,
+        992
+      ],
+      "id": "2f13012f-aa6a-4def-87bc-f32dfcc05199",
+      "name": "构建蹭热点Prompt1"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.prompt }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        992,
+        992
+      ],
+      "id": "128444e5-29f4-4eb9-bf2a-efe553922bcd",
+      "name": "AI蹭热点建议1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst promptItems = $('构建蹭热点Prompt1').all();\nconst results = [];\n\nfor (let i = 0; i < items.length; i++) {\n  const aiRaw = items[i].json.output || '';\n  const orig = promptItems[i] ? promptItems[i].json : {};\n  if (orig._empty) continue;\n  var ds = { translation_cn: '(翻译失败)', longevity_angle: '-', hook_tip: '-', comment_vibe: '-' };\n  try {\n    var cleaned = aiRaw.replace(/```json|```/g, '').trim();\n    ds = JSON.parse(cleaned);\n  } catch (e) {}\n  var rank = orig.orig_rank || (i + 1);\n  var score = orig.orig_engagement_score || 0;\n  var card = {\n    msg_type: 'interactive',\n    card: {\n      config: { wide_screen_mode: true },\n      header: { template: 'red', title: { tag: 'plain_text', content: '\\ud83d\\udd25 热帖 #' + rank + ' | \\ud83d\\udcac' + orig.orig_reply_count + ' replies | 分数 ' + score } },\n      elements: [\n        { tag: 'div', fields: [\n          { is_short: true, text: { tag: 'lark_md', content: '**\\ud83d\\udc64 作者**\\n' + orig.orig_author_name + '\\n@' + orig.orig_author_handle } },\n          { is_short: true, text: { tag: 'lark_md', content: '**\\ud83d\\udcca 互动**\\n\\u2764\\ufe0f ' + orig.orig_like_count + '  \\ud83d\\udd01 ' + orig.orig_repost_count + '\\n\\ud83d\\udcac ' + orig.orig_reply_count + '  \\ud83d\\udc41 ' + (orig.orig_view_count || '-') } }\n        ]},\n        { tag: 'hr' },\n        { tag: 'div', text: { tag: 'lark_md', content: '**\\ud83c\\uddec\\ud83c\\udde7 原文**\\n' + orig.orig_full_text } },\n        { tag: 'div', text: { tag: 'lark_md', content: '**\\ud83c\\udde8\\ud83c\\uddf3 译文**\\n' + ds.translation_cn } },\n        { tag: 'hr' },\n        { tag: 'div', text: { tag: 'lark_md', content: '\\ud83c\\udfaf **长寿切入**：' + ds.longevity_angle } },\n        { tag: 'div', text: { tag: 'lark_md', content: '\\ud83d\\udca1 **蹭点提示**：' + ds.hook_tip } },\n        { tag: 'div', text: { tag: 'lark_md', content: '\\ud83d\\udde3\\ufe0f **评论区氛围**：' + ds.comment_vibe } },\n        { tag: 'action', actions: [{ tag: 'button', text: { tag: 'plain_text', content: '\\ud83d\\udd17 查看原推' }, type: 'primary', url: orig.orig_tweet_url }] }\n      ]\n    }\n  };\n  results.push({ json: { feishuBody: JSON.stringify(card) } });\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1248,
+        992
+      ],
+      "id": "90b38ad0-246c-44b0-8ab7-52b8991c291c",
+      "name": "格式化飞书卡片1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst results = [];\nvar top2 = items.slice(0, 2);\n\nfor (var j = 0; j < top2.length; j++) {\n  var t = top2[j].json;\n  if (t._empty) continue;\n  var isQuote = t.is_quote_tweet && t.quoted_text;\n  var userPrompt = '你是一个长寿与抗衰媒体的资深内容编辑，擅长将抗衰信息用风趣且专业的语言转化为对抗衰感兴趣的普通中文读者能理解和受益的内容，风格简洁、有温度、不说废话，语气像一个懂行的朋友在微信上给你发消息分享见闻。\\n\\n请将下面这条来自 X 的帖子，转化为一篇适合发布在中文抗衰资讯网站的短讯息。\\n\\n---\\n原帖作者: ' + t.author_name + ' (' + t.author_handle + ')\\n原帖内容: ' + t.full_text + '\\n' + (isQuote ? '引用的原帖: ' + t.quoted_text + '\\n' : '') + '互动数据: \\u2764\\ufe0f' + t.like_count + ' \\ud83d\\udd01' + t.repost_count + ' \\ud83d\\udcac' + t.reply_count + ' \\ud83d\\udc41' + t.view_count + '\\n' + (t.discussion_summary ? '评论区讨论方向: ' + t.discussion_summary + '\\n' : '') + '---\\n\\n请严格输出以下 JSON（不要 markdown、不要代码块、不要任何解释）：\\n\\n{\\n  \"title\": \"中文标题，12-20字，能让关注健康的用户想点进来看\",\\n  \"body_html\": \"HTML格式正文，200-300字，不要任何小标题（不要h3/h4），就是2-3段自然段落：第一段讲清楚这是什么事（用人话不用术语堆砌），第二段讲这对关注健康的普通人意味着什么（给一个具体的、生活化的启示或行动建议，不要空洞的鼓励），最后一行写：<p><a href=\\\\\"' + (t.tweet_url || '') + '\\\\\" target=\\\\\"_blank\\\\\">查看原帖 \\u2192</a> | 来自 ' + t.author_name + '</p>\",\\n  \"excerpt\": \"50字左右的摘要\",\\n  \"category_slug\": \"从以下7个中选一个最匹配的: aging-mechanism / intervention / clinical-progress / lifestyle / industry / assessment / people-opinion\",\\n  \"tags\": [\"3-5个中文标签\"],\\n  \"seo_title\": \"SEO标题50字以内\",\\n  \"seo_description\": \"SEO描述80字以内\"\\n}';\n  results.push({\n    json: {\n      prompt: userPrompt,\n      orig_author_name: '' + (t.author_name || ''),\n      orig_author_handle: '' + (t.author_handle || ''),\n      orig_full_text: '' + (t.full_text || ''),\n      orig_tweet_url: '' + (t.tweet_url || ''),\n      orig_source_pipeline: 'hot_topic'\n    }\n  });\n}\n\nif (results.length === 0) return [{ json: { _empty: true } }];\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        752,
+        1472
+      ],
+      "id": "08010cd1-0293-4f9a-81d4-a734178beebc",
+      "name": "取Top2并构建文章Prompt1"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.prompt }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        992,
+        1472
+      ],
+      "id": "45b27d46-f2a9-4d41-af5b-d072197b914a",
+      "name": "AI生成文章1"
+    },
+    {
+      "parameters": {
+        "model": "google/gemini-3.1-flash-lite-preview",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        992,
+        1696
+      ],
+      "id": "9de606f8-93a5-4528-a8d1-2d38e49deefe",
+      "name": "模型B1",
+      "credentials": {
+        "openRouterApi": {
+          "id": "REDACTED_OPEN_ROUTER_API_CREDENTIAL_ID",
+          "name": "REDACTED_OPEN_ROUTER_API_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst promptItems = $('取Top2并构建文章Prompt1').all();\nconst results = [];\n\nfor (let i = 0; i < items.length; i++) {\n  const aiOutput = items[i].json.output || '';\n  const orig = promptItems[i] ? promptItems[i].json : {};\n  if (orig._empty) continue;\n  let article;\n  try {\n    const cleaned = aiOutput.replace(/```json|```/g, '').trim();\n    article = JSON.parse(cleaned);\n  } catch (e) {\n    results.push({ json: { wp_body: JSON.stringify({ title: '[待修复] ' + (orig.orig_author_name || ''), content: '<p>AI生成失败</p>', excerpt: '', status: 'draft', categories: [21] }), quality_passed: false } });\n    continue;\n  }\n  const issues = [];\n  if (!article.title || article.title.length < 8) issues.push('title_too_short');\n  if (!article.body_html || article.body_html.length < 100) issues.push('body_too_short');\n  const hasBlocking = issues.some(function(x) { return x === 'title_too_short' || x === 'body_too_short'; });\n  results.push({ json: { wp_body: JSON.stringify({ title: article.title || orig.orig_author_name + ' 的最新动态', content: article.body_html || '', excerpt: article.excerpt || '', status: hasBlocking ? 'draft' : 'publish', categories: [21] }), quality_passed: !hasBlocking } });\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1232,
+        1472
+      ],
+      "id": "80d48aea-022b-4134-bc9f-9cf283ebdc73",
+      "name": "质量检查1"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://longevityforesight.com/wp-json/wp/v2/posts",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Basic YOUR_WORDPRESS_AUTH_TOKEN"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.wp_body }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 2000
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1472,
+        1472
+      ],
+      "id": "ae0019dd-046e-40b4-8a48-63bab95c0b7d",
+      "name": "发布到WordPress1"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 2,10,20 * * *"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -496,
+        1232
+      ],
+      "id": "e24eacda-ba0a-42f3-83d4-9574cfae593a",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://open.feishu.cn/open-apis/bot/v2/hook/YOUR_FEISHU_WEBHOOK_ID",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.feishuBody }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1472,
+        992
+      ],
+      "id": "29164ed3-f8cd-4454-95d1-23b562a4369b",
+      "name": "发给飞书"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+      "typeVersion": 1,
+      "position": [
+        992,
+        1200
+      ],
+      "id": "bb1ca241-fe5f-455b-ba22-13014232e74f",
+      "name": "DeepSeek Chat Model",
+      "credentials": {
+        "deepSeekApi": {
+          "id": "REDACTED_DEEP_SEEK_API_CREDENTIAL_ID",
+          "name": "REDACTED_DEEP_SEEK_API_CREDENTIAL_NAME"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "构建Grok搜索请求1": {
+      "main": [
+        [
+          {
+            "node": "调用Grok搜索热帖1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "调用Grok搜索热帖1": {
+      "main": [
+        [
+          {
+            "node": "解析去重1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "解析去重1": {
+      "main": [
+        [
+          {
+            "node": "评分筛选排除KOL1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "评分筛选排除KOL1": {
+      "main": [
+        [
+          {
+            "node": "构建蹭热点Prompt1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "取Top2并构建文章Prompt1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "构建蹭热点Prompt1": {
+      "main": [
+        [
+          {
+            "node": "AI蹭热点建议1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI蹭热点建议1": {
+      "main": [
+        [
+          {
+            "node": "格式化飞书卡片1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "格式化飞书卡片1": {
+      "main": [
+        [
+          {
+            "node": "发给飞书",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "取Top2并构建文章Prompt1": {
+      "main": [
+        [
+          {
+            "node": "AI生成文章1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI生成文章1": {
+      "main": [
+        [
+          {
+            "node": "质量检查1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "模型B1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI生成文章1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "构建Grok搜索请求1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DeepSeek Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI蹭热点建议1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "质量检查1": {
+      "main": [
+        [
+          {
+            "node": "发布到WordPress1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false,
+    "timeSavedMode": "fixed",
+    "timezone": "Asia/Shanghai",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "versionId": "REDACTED_VERSION_ID",
+  "meta": {
+    "templateCredsSetupCompleted": "REDACTED_TEMPLATE_CREDS_STATUS",
+    "instanceId": "REDACTED_INSTANCE_ID"
+  },
+  "id": "REDACTED_WORKFLOW_ID",
+  "tags": []
+}
